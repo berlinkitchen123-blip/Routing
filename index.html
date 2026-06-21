@@ -162,6 +162,34 @@ tbody tr{transition:background 0.1s;cursor:pointer}
 .live-dot{width:6px;height:6px;border-radius:50%;background:#10b981;animation:pulse 1.5s infinite}
 @keyframes pulse{0%,100%{opacity:1}50%{opacity:0.3}}
 </style>
+
+<script type="module">
+  import { initializeApp, getApps } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
+  import { getAuth, signInAnonymously, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js";
+  import { getFirestore, collection, getDocs, doc, setDoc } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
+  const _fbCfg = { apiKey:"AIzaSyBr46XcXJPfxtxl6GpTmQPU7dPl68RuVXs", authDomain:"routing-22aad.firebaseapp.com", projectId:"routing-22aad", databaseURL:"https://routing-22aad-default-rtdb.europe-west1.firebasedatabase.app", storageBucket:"routing-22aad.firebasestorage.app", messagingSenderId:"211369121765", appId:"1:211369121765:web:1140d31af504365af8810c" };
+  const _app = getApps().length ? getApps()[0] : initializeApp(_fbCfg);
+  const _auth = getAuth(_app);
+  const _db = getFirestore(_app);
+  signInAnonymously(_auth).catch(()=>{});
+  onAuthStateChanged(_auth, user => {
+    if (!user) return;
+    window._fbDb = _db;
+    window._fsGetOrders = async (date, kitchen) => {
+      const snap = await getDocs(collection(_db, 'orders', date+'-'+kitchen, 'stops'));
+      return snap.docs.map(d => ({ ...d.data(), branchId: d.id }));
+    };
+    window._fsGetSummary = async (date, kitchen) => {
+      const { getDoc } = await import("https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js");
+      const s = await getDoc(doc(_db,'orders',date+'-'+kitchen));
+      return s.exists() ? s.data() : null;
+    };
+    window._fsSavePlan = async (date, kitchen, assignments) => {
+      for (const a of assignments) await setDoc(doc(_db,'plan_assignments',date+'-'+kitchen+'-'+a.branchId),{...a,date,kitchen,savedAt:new Date().toISOString()});
+      await setDoc(doc(_db,'plans',date+'-'+kitchen),{date,kitchen,totalStops:assignments.length,savedAt:new Date().toISOString()});
+    };
+  });
+</script>
 </head>
 <body>
 
