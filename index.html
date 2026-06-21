@@ -162,34 +162,6 @@ tbody tr{transition:background 0.1s;cursor:pointer}
 .live-dot{width:6px;height:6px;border-radius:50%;background:#10b981;animation:pulse 1.5s infinite}
 @keyframes pulse{0%,100%{opacity:1}50%{opacity:0.3}}
 </style>
-
-<script type="module">
-  import { initializeApp, getApps } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
-  import { getAuth, signInAnonymously, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js";
-  import { getFirestore, collection, getDocs, doc, setDoc } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
-  const _fbCfg = { apiKey:"AIzaSyBr46XcXJPfxtxl6GpTmQPU7dPl68RuVXs", authDomain:"routing-22aad.firebaseapp.com", projectId:"routing-22aad", databaseURL:"https://routing-22aad-default-rtdb.europe-west1.firebasedatabase.app", storageBucket:"routing-22aad.firebasestorage.app", messagingSenderId:"211369121765", appId:"1:211369121765:web:1140d31af504365af8810c" };
-  const _app = getApps().length ? getApps()[0] : initializeApp(_fbCfg);
-  const _auth = getAuth(_app);
-  const _db = getFirestore(_app);
-  signInAnonymously(_auth).catch(()=>{});
-  onAuthStateChanged(_auth, user => {
-    if (!user) return;
-    window._fbDb = _db;
-    window._fsGetOrders = async (date, kitchen) => {
-      const snap = await getDocs(collection(_db, 'orders', date+'-'+kitchen, 'stops'));
-      return snap.docs.map(d => ({ ...d.data(), branchId: d.id }));
-    };
-    window._fsGetSummary = async (date, kitchen) => {
-      const { getDoc } = await import("https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js");
-      const s = await getDoc(doc(_db,'orders',date+'-'+kitchen));
-      return s.exists() ? s.data() : null;
-    };
-    window._fsSavePlan = async (date, kitchen, assignments) => {
-      for (const a of assignments) await setDoc(doc(_db,'plan_assignments',date+'-'+kitchen+'-'+a.branchId),{...a,date,kitchen,savedAt:new Date().toISOString()});
-      await setDoc(doc(_db,'plans',date+'-'+kitchen),{date,kitchen,totalStops:assignments.length,savedAt:new Date().toISOString()});
-    };
-  });
-</script>
 </head>
 <body>
 
@@ -1128,6 +1100,115 @@ function planWhatsApp() {
   '</div>';
   document.body.appendChild(mo);
 }
+
+
+// ============================================================
+// BELLA-BONA JSON IMPORT — paste from existing site
+// ============================================================
+function openJsonImportModal() {
+  const mo = document.createElement('div');
+  mo.className = 'modal-overlay';
+  mo.id = 'json-import-modal';
+  mo.innerHTML =
+  '<div class="modal" style="width:min(700px,95vw);max-height:90vh;overflow-y:auto">' +
+  '<button class="modal-close" onclick="this.closest(\'.modal-overlay\').remove()">×</button>' +
+  '<h3>📋 Import Orders from Bella-Bona JSON</h3>' +
+  '<p style="font-size:13px;color:#6b7280;margin-bottom:12px">Go to your Bella-Bona kitchen site → copy the order JSON → paste it below. Works for any date, any kitchen.</p>' +
+  '<textarea id="json-paste-area" placeholder='Paste JSON here...' style="width:100%;height:200px;border:1px solid #e5e7eb;border-radius:8px;padding:10px;font-size:12px;font-family:monospace;resize:vertical"></textarea>' +
+  '<div id="json-preview" style="margin-top:12px"></div>' +
+  '<div style="display:flex;gap:8px;justify-content:flex-end;margin-top:16px">' +
+  '<button class="btn" onclick="this.closest(\'.modal-overlay\').remove()">Cancel</button>' +
+  '<button class="btn" onclick="previewJsonImport()">👁 Preview</button>' +
+  '<button class="btn btn-primary" onclick="importJsonData()">✅ Import & Plan</button>' +
+  '</div></div>';
+  document.body.appendChild(mo);
+}
+
+function parseOmsJson(raw) {
+  const data = JSON.parse(raw);
+  return data.map(branch => {
+    const totalBoxes = branch.boxes ? branch.boxes.length : 0;
+    const uniqueUsers = new Set();
+    (branch.boxes||[]).forEach(box => {
+      (box.dishes||[]).forEach(dish => {
+        (dish.users||[]).forEach(u => { if(u.orderedQuantity>0) uniqueUsers.add(u.id); });
+      });
+    });
+    const dishes = [];
+    (branch.boxes||[]).forEach(box => {
+      (box.dishes||[]).forEach(dish => {
+        dishes.push({ name:dish.name, label:dish.label, type:box.type, size:box.size,
+          count:(dish.users||[]).reduce((s,u)=>s+(u.orderedQuantity||0),0) });
+      });
+    });
+    return {
+      branchId:    branch.id,
+      company:     branch.name,
+      address:     branch.deliveryAddress || '',
+      postCode:    branch.deliveryPostalCode || '',
+      city:        branch.deliveryCity || '',
+      deliveryInfo: branch.deliveryInstructions || '',
+      orderCount:  totalBoxes,
+      userCount:   uniqueUsers.size,
+      readyTime:   branch.readyTime,
+      leaveTime:   branch.leaveTime,
+      boxes:       branch.boxes || [],
+      dishes:      dishes,
+    };
+  });
+}
+
+function previewJsonImport() {
+  const raw = document.getElementById('json-paste-area').value.trim();
+  if (!raw) { alert('Paste JSON first'); return; }
+  try {
+    const stops = parseOmsJson(raw);
+    const prev = document.getElementById('json-preview');
+    prev.innerHTML =
+    '<div style="background:#f0fdf4;border:1px solid #bbf7d0;border-radius:8px;padding:12px;font-size:13px">' +
+    '<b>✅ ' + stops.length + ' companies parsed</b> — ' +
+    stops.reduce((s,r)=>s+r.orderCount,0) + ' boxes total, ' +
+    stops.reduce((s,r)=>s+r.userCount,0) + ' users<br><br>' +
+    '<div style="max-height:200px;overflow-y:auto">' +
+    stops.map(s=>'<div style="padding:3px 0;border-bottom:1px solid #f3f4f6;font-size:12px">' +
+      '<b>'+s.company+'</b> — ' + s.orderCount + ' box(es) · ' + s.userCount + ' users' +
+      (s.readyTime?' · Ready: '+s.readyTime:'') +
+      (s.leaveTime?' · Leave: '+s.leaveTime:'') +
+    '</div>').join('') +
+    '</div></div>';
+  } catch(e) {
+    document.getElementById('json-preview').innerHTML = '<div style="color:#dc2626">❌ Invalid JSON: '+e.message+'</div>';
+  }
+}
+
+async function importJsonData() {
+  const raw = document.getElementById('json-paste-area').value.trim();
+  if (!raw) { alert('Paste JSON first'); return; }
+  try {
+    const stops = parseOmsJson(raw);
+    _planStops = stops;
+    _planAssign = {};
+    _planNotes  = {};
+    // Auto-detect date from JSON (from uniqueIdentifier or use selected date)
+    const dateMatch = raw.match(/\d{4}-\d{2}-\d{2}/);
+    if (dateMatch && document.getElementById('plan-date')) {
+      _planDate = dateMatch[0];
+      document.getElementById('plan-date').value = _planDate;
+    }
+    // Auto-assign by zone
+    await planAutoAssign(true);
+    document.querySelector('.modal-overlay').remove();
+    // Show enriched grid with dish details
+    _paintPlanGrid();
+    // Show success
+    const bodyEl = document.getElementById('plan-body');
+    const banner = '<div style="background:#f0fdf4;border:1px solid #bbf7d0;border-radius:8px;padding:8px 14px;font-size:13px;color:#16a34a;margin-bottom:8px">✅ <b>'+stops.length+' companies · '+stops.reduce((s,r)=>s+r.orderCount,0)+' boxes · '+stops.reduce((s,r)=>s+r.userCount,0)+' users</b> imported from Bella-Bona JSON</div>';
+    if (bodyEl) bodyEl.insertAdjacentHTML('afterbegin', banner);
+  } catch(e) {
+    alert('Import failed: '+e.message);
+  }
+}
+
 
 // ============================================================
 // BERLIN TRIAL RUN — end-to-end flow
