@@ -1,13 +1,12 @@
 name: Daily Sync — MySQL to Firestore
+# NOTE: Runs from your Mac instead (node ~/Desktop/run-sync.js)
+# GitHub Actions can't reach the AWS RDS — run sync locally any time you want.
 
 on:
-  schedule:
-    - cron: '0 7 * * 1-5'
-    - cron: '0 6 * * 1-5'
   workflow_dispatch:
     inputs:
       date:
-        description: 'Sync date (YYYY-MM-DD, defaults to tomorrow)'
+        description: 'Date to sync (YYYY-MM-DD)'
         required: false
 
 jobs:
@@ -15,16 +14,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
+      - uses: actions/setup-node@v4
         with:
           node-version: '24'
-
-      - name: Install sync dependencies
-        run: cd sync && npm install
-
-      - name: Run MySQL to Firestore sync
+      - run: cd sync && npm install
+      - name: Run sync
         env:
           MYSQL_HOST:     ${{ secrets.MYSQL_HOST }}
           MYSQL_PORT:     3306
@@ -32,10 +26,4 @@ jobs:
           MYSQL_PASSWORD: ${{ secrets.MYSQL_PASSWORD }}
           MYSQL_DATABASE: ${{ secrets.MYSQL_DATABASE }}
           FIREBASE_SERVICE_ACCOUNT_JSON: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
-        run: |
-          DATE="${{ github.event.inputs.date }}"
-          if [ -z "$DATE" ]; then
-            node sync/sync.js
-          else
-            node sync/sync.js "$DATE"
-          fi
+        run: node sync/sync.js "${{ github.event.inputs.date }}"
