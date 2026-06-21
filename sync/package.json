@@ -1,0 +1,1 @@
+{"name":"bellabona-sync","main":"sync.js","engines":{"node":">=18"},"dependencies":{"firebase-admin":"^12.0.0","mysql2":"^3.6.5"},"private":true}
