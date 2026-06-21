@@ -1,0 +1,42 @@
+name: Daily Sync — MySQL to Firestore
+
+on:
+  schedule:
+    # 9:00 AM Berlin time = 7:00 AM UTC (CET) / 8:00 AM UTC (CEST)
+    - cron: '0 7 * * 1-5'   # Weekdays 9am CET
+    - cron: '0 6 * * 1-5'   # Weekdays 9am CEST (summer)
+  workflow_dispatch:          # Allow manual trigger from GitHub UI
+    inputs:
+      date:
+        description: 'Sync date (YYYY-MM-DD, defaults to tomorrow)'
+        required: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install sync dependencies
+        run: cd sync && npm install
+
+      - name: Run MySQL → Firestore sync
+        env:
+          MYSQL_HOST:     ${{ secrets.MYSQL_HOST }}
+          MYSQL_PORT:     ${{ secrets.MYSQL_PORT }}
+          MYSQL_USER:     ${{ secrets.MYSQL_USER }}
+          MYSQL_PASSWORD: ${{ secrets.MYSQL_PASSWORD }}
+          MYSQL_DATABASE: ${{ secrets.MYSQL_DATABASE }}
+          FIREBASE_SERVICE_ACCOUNT_JSON: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+        run: |
+          DATE="${{ github.event.inputs.date }}"
+          if [ -z "$DATE" ]; then
+            node sync/sync.js
+          else
+            node sync/sync.js "$DATE"
+          fi
