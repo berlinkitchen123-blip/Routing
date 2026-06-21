@@ -200,7 +200,7 @@ tbody tr{transition:background 0.1s;cursor:pointer}
 </div>
 
 <script>
-let API_BASE = (() => { try { return localStorage.getItem('lmm_api_base') || 'http://localhost:3001'; } catch(e) { return 'http://localhost:3001'; } })();
+let API_BASE = (() => { try { return localStorage.getItem('lmm_api_base') || ''; } catch(e) { return ''; } })();
 
 const MUNICH_ROUTES = [
   {name:'Adrian',stops:2,boxes:6,weight:84,start:'11:30',end:'11:38',late:0,city:'Munich',color:'#6366f1'},
