@@ -362,6 +362,7 @@ const NAV_ITEMS = [
   {hash:'#dashboard',label:'Dashboard',icon:'📊'},
   {hash:'#route-plans',label:'Route Plans',icon:'🗺️'},
   {hash:'#planning',label:'Daily Planning',icon:'📋'},
+  {hash:'#dispatch',label:'Dispatch',icon:'🚚'},
   {hash:'#orders',label:'Orders',icon:'📦'},
   {hash:'#couriers',label:'Couriers',icon:'🚗'},
   {hash:'#shifts',label:'Shifts',icon:'🔄'},
@@ -443,6 +444,8 @@ function route() {
     case '#dashboard': renderDashboard(); break;
     case '#route-plans': renderRoutePlans(); break;
     case '#planning': renderPlanning(); break;
+    case '#dispatch': renderDispatch(); break;
+    case '#driver': renderDriverApp(); break;
     case '#orders': renderOrders(); break;
     case '#couriers': renderCouriers(); break;
     case '#shifts': renderShifts(); break;
@@ -934,6 +937,7 @@ async function renderPlanning() {
     '<button class="btn" onclick="planAutoAssign()" title="Assign by postal zone">🗺 Auto-Assign Zones</button>' +
     '<button class="btn" onclick="planLastWeek()" title="Copy from same day last week">📅 Use Last Week</button>' +
     '<button class="btn" style="background:#10b981;color:#fff;border-color:#10b981" onclick="planSaveToApp()">💾 Save → Driver App</button>' +
+    '<button class="btn" style="background:#dc2626;color:#fff;border-color:#dc2626" onclick="lockAndDispatch()">🔒 Lock & Dispatch</button>' +
     '<button class="btn" style="background:#217346;color:#fff;border-color:#217346" onclick="planExportExcel()">📊 Export Excel</button>' +
     '<button class="btn" style="background:#25d366;color:#fff;border-color:#25d366" onclick="planWhatsApp()">💬 WhatsApp</button>' +
     '<button class="btn" style="background:#0ea5e9;color:#fff;border-color:#0ea5e9" onclick="showPlanningMap()">📍 Map View</button>' +
@@ -1508,6 +1512,371 @@ function planAddDriver() {
     _planDrivers.push(name.trim());
     _paintPlanGrid();
   }
+}
+
+
+// ════════════════════════════════════════════════════════════
+// DISPATCH SYSTEM — Lock plan, driver app, QR scanning
+// ════════════════════════════════════════════════════════════
+
+// Lock and push routes to each driver
+async function lockAndDispatch() {
+  if (_planStops.length === 0) { alert('Load stops first'); return; }
+  const assigned = _planDrivers.filter(d => d !== 'Unassigned' && _planStops.some(s => _planAssign[s.branchId] === d));
+  if (assigned.length === 0) { alert('Assign stops to drivers first'); return; }
+  if (!confirm('🔒 Lock this plan and send routes to ' + assigned.length + ' drivers?\n\nDrivers will see their stops in the Driver App.')) return;
+
+  if (!window._fbReady || !window._fbDb) { alert('Firebase not ready'); return; }
+
+  const btn = event.target; btn.disabled=true; btn.textContent='Dispatching…';
+  const dateStr = _planDate || new Date().toLocaleDateString('en-CA');
+  const kitchen = _planKitchen || 'Berlin';
+  const dispatchKey = dateStr + '_' + kitchen;
+  const now = new Date().toISOString();
+
+  // Build per-driver stop lists with full box details
+  const driverRoutes = {};
+  assigned.forEach(driver => {
+    const stops = _planStops.filter(s => _planAssign[s.branchId] === driver && s.hasOrder !== false);
+    driverRoutes[driver] = {
+      driver, date: dateStr, kitchen,
+      dispatchedAt: now,
+      status: 'pending', // pending → confirmed → in_progress → completed
+      stops: stops.map((s, idx) => ({
+        sequence: idx + 1,
+        branchId: s.branchId,
+        company: s.company,
+        address: s.address || '',
+        postCode: s.postCode || '',
+        city: s.city || '',
+        deliveryInfo: s.deliveryInfo || '',
+        orderCount: s.orderCount || 1,
+        note: _planNotes[s.branchId] || '',
+        // Box QR codes from original JSON
+        boxIds: (s.boxes||[]).map(b => b.uniqueIdentifier).filter(Boolean),
+        status: 'pending', // pending → scanned → delivered
+        scannedBoxes: [],
+      })),
+    };
+  });
+
+  try {
+    // Save master dispatch record
+    await window._fbSetDoc(window._fbDoc(window._fbDb, 'dispatches', dispatchKey), {
+      date: dateStr, kitchen, lockedAt: now,
+      drivers: assigned,
+      totalStops: _planStops.filter(s => s.hasOrder !== false).length,
+      status: 'dispatched',
+    });
+
+    // Save individual driver routes
+    for (const [driver, route] of Object.entries(driverRoutes)) {
+      const driverKey = dispatchKey + '_' + driver.replace(/\s+/g,'_');
+      await window._fbSetDoc(window._fbDoc(window._fbDb, 'driverRoutes', driverKey), route);
+    }
+
+    btn.disabled=false; btn.textContent='🔒 Lock & Dispatch';
+    const el = document.getElementById('plan-msg');
+    if (el) el.innerHTML = '<div style="background:#fef2f2;border:1px solid #fecaca;border-radius:8px;padding:10px 14px;font-size:13px;color:#dc2626;margin-bottom:8px">🔒 <b>Plan locked & dispatched</b> for '+dateStr+' · '+assigned.length+' drivers notified · <a href="#dispatch" onclick="window.location.hash=\'#dispatch\'" style="color:#dc2626">View Dispatch Monitor →</a></div>';
+    window.location.hash = '#dispatch';
+  } catch(e) {
+    alert('Dispatch failed: '+e.message);
+    btn.disabled=false; btn.textContent='🔒 Lock & Dispatch';
+  }
+}
+
+// ── DISPATCH MONITOR ──────────────────────────────────────────
+async function renderDispatch() {
+  document.getElementById('content').innerHTML = '<div class="page"><div style="padding:40px;text-align:center;color:#9ca3af">Loading dispatch…</div></div>';
+  if (!window._fbReady || !window._fbDb) return;
+
+  try {
+    const { getDocs } = await import('https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js');
+
+    // Load recent dispatches
+    const dispSnap = await getDocs(window._fbCollection(window._fbDb,'dispatches'));
+    const dispatches = [];
+    dispSnap.forEach(d => dispatches.push({id:d.id,...d.data()}));
+    dispatches.sort((a,b)=>b.date.localeCompare(a.date));
+
+    const latest = dispatches[0];
+    let routesHtml = '<div style="color:#9ca3af;text-align:center;padding:40px">No dispatched routes yet. Lock a plan first.</div>';
+
+    if (latest) {
+      const routeSnap = await getDocs(window._fbCollection(window._fbDb,'driverRoutes'));
+      const routes = [];
+      routeSnap.forEach(d => { const r=d.data(); if(r.date===latest.date&&r.kitchen===latest.kitchen) routes.push({id:d.id,...r}); });
+
+      const STATUS_COLORS = { pending:'#f59e0b', confirmed:'#3b82f6', in_progress:'#8b5cf6', completed:'#10b981' };
+      const STATUS_LABELS = { pending:'⏳ Pending', confirmed:'✅ Confirmed', in_progress:'🚗 In Progress', completed:'🎉 Completed' };
+
+      routesHtml = routes.map(route => {
+        const total = route.stops?.length || 0;
+        const done = route.stops?.filter(s=>s.status==='delivered').length || 0;
+        const color = STATUS_COLORS[route.status] || '#9ca3af';
+        const label = STATUS_LABELS[route.status] || route.status;
+        const pct = total > 0 ? Math.round(done/total*100) : 0;
+        const driverAppUrl = window.location.origin + window.location.pathname + '?driver=' + encodeURIComponent(route.driver) + '&date=' + route.date + '&kitchen=' + route.kitchen + '#driver';
+        return '<div style="background:#fff;border:1px solid #e5e7eb;border-radius:10px;padding:16px;margin-bottom:12px">' +
+          '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;flex-wrap:wrap;gap:8px">' +
+            '<div style="display:flex;align-items:center;gap:10px">' +
+              '<div style="width:40px;height:40px;border-radius:50%;background:'+color+'20;color:'+color+';display:flex;align-items:center;justify-content:center;font-size:16px;font-weight:700">'+route.driver.substring(0,2).toUpperCase()+'</div>' +
+              '<div><div style="font-weight:700;font-size:15px">'+route.driver+'</div>' +
+              '<div style="font-size:12px;color:#6b7280">'+total+' stops · '+route.date+'</div></div>' +
+            '</div>' +
+            '<div style="display:flex;align-items:center;gap:8px">' +
+              '<span style="background:'+color+'20;color:'+color+';padding:4px 10px;border-radius:20px;font-size:12px;font-weight:600">'+label+'</span>' +
+              '<a href="'+driverAppUrl+'" target="_blank" style="background:#1a1a2e;color:#fff;padding:5px 12px;border-radius:6px;font-size:12px;text-decoration:none;font-weight:600">📱 Open Driver App</a>' +
+            '</div>' +
+          '</div>' +
+          '<div style="background:#f9fafb;border-radius:6px;overflow:hidden;margin-bottom:8px">' +
+            '<div style="background:'+color+';height:6px;width:'+pct+'%;transition:width 0.5s"></div>' +
+          '</div>' +
+          '<div style="display:flex;gap:12px;flex-wrap:wrap">' +
+          (route.stops||[]).map(s =>
+            '<div style="background:'+(s.status==='delivered'?'#f0fdf4':s.status==='scanned'?'#eff6ff':'#f9fafb')+';border:1px solid '+(s.status==='delivered'?'#bbf7d0':s.status==='scanned'?'#bfdbfe':'#e5e7eb')+';border-radius:6px;padding:6px 10px;font-size:11px;min-width:120px">' +
+              '<div style="font-weight:600">'+s.sequence+'. '+shortName(s.company)+'</div>' +
+              '<div style="color:#6b7280">'+s.orderCount+' box'+(s.orderCount>1?'es':'')+'</div>' +
+              '<div style="color:'+(s.status==='delivered'?'#16a34a':s.status==='scanned'?'#2563eb':'#9ca3af')+';font-size:10px">'+
+                (s.status==='delivered'?'✅ Delivered':s.status==='scanned'?'📷 Scanned':'⏳ Pending')+
+              '</div>' +
+            '</div>'
+          ).join('') +
+          '</div></div>';
+      }).join('') || '<div style="color:#9ca3af;text-align:center;padding:20px">No routes for '+latest.date+'</div>';
+    }
+
+    document.getElementById('content').innerHTML =
+      '<div class="page">' +
+      '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:20px;flex-wrap:wrap;gap:12px">' +
+        '<div><h2 style="font-size:22px;font-weight:700">🚚 Dispatch Monitor</h2>' +
+        '<p style="color:#6b7280;font-size:14px">Real-time driver confirmation & delivery tracking</p></div>' +
+        '<div style="display:flex;gap:8px">' +
+          '<select id="dispatch-date" onchange="renderDispatch()" style="border:1px solid #d1d5db;border-radius:7px;padding:6px 12px;font-size:13px">' +
+          dispatches.slice(0,10).map(d=>'<option value="'+d.date+'"'+(latest&&d.date===latest.date?' selected':'')+'>'+d.date+' ('+d.kitchen+')</option>').join('') +
+          '</select>' +
+          '<button onclick="renderDispatch()" class="btn">↻ Refresh</button>' +
+        '</div>' +
+      '</div>' +
+      (latest ? '<div style="background:#fef9c3;border:1px solid #fde68a;border-radius:8px;padding:10px 14px;font-size:13px;color:#92400e;margin-bottom:16px">🔒 Locked: <b>'+latest.date+'</b> ('+latest.kitchen+') · '+latest.drivers.length+' drivers · '+(latest.totalStops||0)+' stops · Dispatched at '+(latest.lockedAt?new Date(latest.lockedAt).toLocaleTimeString('de-DE',{hour:'2-digit',minute:'2-digit'}):'—')+'</div>' : '') +
+      routesHtml +
+      '</div>';
+  } catch(e) {
+    document.getElementById('content').innerHTML = '<div class="page"><div style="color:#dc2626;padding:20px">Error: '+e.message+'</div></div>';
+  }
+}
+
+// ── DRIVER APP (phone-friendly) ───────────────────────────────
+async function renderDriverApp() {
+  const params = new URLSearchParams(window.location.search);
+  const driverParam = params.get('driver');
+  const dateParam   = params.get('date') || new Date().toLocaleDateString('en-CA');
+  const kitchenParam = params.get('kitchen') || 'Berlin';
+
+  document.getElementById('content').innerHTML =
+    '<div style="max-width:480px;margin:0 auto;padding:16px">' +
+    '<div style="background:#1a1a2e;color:#fff;border-radius:12px;padding:16px;margin-bottom:16px;text-align:center">' +
+      '<div style="font-size:20px;font-weight:900;color:#e85d04">BellaBona</div>' +
+      '<div style="font-size:13px;opacity:0.7">Driver App · '+dateParam+'</div>' +
+    '</div>' +
+    (driverParam ?
+      '<div id="driver-content"><div style="text-align:center;padding:40px;color:#9ca3af">Loading your route…</div></div>' :
+      '<div style="background:#fff;border:1px solid #e5e7eb;border-radius:10px;padding:20px">' +
+        '<h3 style="margin-bottom:16px;font-size:16px">Enter Your Name</h3>' +
+        '<input id="driver-name-input" placeholder="e.g. Samir" style="width:100%;border:1px solid #d1d5db;border-radius:8px;padding:12px;font-size:16px;margin-bottom:12px" autofocus>' +
+        '<button onclick="loadDriverRoute()" style="width:100%;background:#e85d04;color:#fff;border:none;border-radius:8px;padding:14px;font-size:16px;font-weight:700;cursor:pointer">▶ Start My Route</button>' +
+      '</div>'
+    ) +
+    '</div>';
+
+  if (driverParam) {
+    await loadDriverRoute(driverParam, dateParam, kitchenParam);
+  }
+}
+
+async function loadDriverRoute(driverName, date, kitchen) {
+  if (!driverName) {
+    driverName = document.getElementById('driver-name-input')?.value.trim();
+    if (!driverName) { alert('Enter your name'); return; }
+    date = new Date().toLocaleDateString('en-CA');
+    kitchen = 'Berlin';
+  }
+
+  if (!window._fbReady || !window._fbDb) return;
+
+  const driverKey = date + '_' + kitchen + '_' + driverName.replace(/\s+/g,'_');
+  try {
+    const snap = await window._fbGetDoc(window._fbDoc(window._fbDb,'driverRoutes',driverKey));
+    if (!snap.exists()) {
+      document.getElementById('driver-content').innerHTML =
+        '<div style="background:#fef2f2;border-radius:10px;padding:20px;text-align:center;color:#dc2626">❌ No route found for <b>'+driverName+'</b> on '+date+'.<br><br>Ask your dispatcher to lock the plan.</div>';
+      return;
+    }
+    window._driverRoute = {id: driverKey, ...snap.data()};
+    _paintDriverRoute();
+  } catch(e) {
+    document.getElementById('driver-content').innerHTML = '<div style="color:#dc2626;padding:20px">Error: '+e.message+'</div>';
+  }
+}
+
+function _paintDriverRoute() {
+  const route = window._driverRoute;
+  if (!route) return;
+  const el = document.getElementById('driver-content') || document.querySelector('#content > div');
+  const stops = route.stops || [];
+  const done = stops.filter(s=>s.status==='delivered').length;
+
+  el.innerHTML =
+    '<div style="background:#f0fdf4;border:1px solid #bbf7d0;border-radius:10px;padding:14px;margin-bottom:16px">' +
+      '<div style="font-size:16px;font-weight:700;color:#16a34a">👋 '+route.driver+'</div>' +
+      '<div style="font-size:13px;color:#6b7280">'+stops.length+' stops · '+done+' delivered</div>' +
+      '<div style="background:#e5e7eb;border-radius:4px;height:8px;margin-top:8px;overflow:hidden">' +
+        '<div style="background:#16a34a;height:8px;width:'+(stops.length>0?Math.round(done/stops.length*100):0)+'%;transition:width 0.5s"></div>' +
+      '</div>' +
+    '</div>' +
+    stops.map((stop, idx) => {
+      const isDone = stop.status === 'delivered';
+      const isScanned = stop.status === 'scanned';
+      return '<div id="stop-card-'+idx+'" style="background:#fff;border:2px solid '+(isDone?'#bbf7d0':isScanned?'#bfdbfe':'#e5e7eb')+';border-radius:10px;padding:14px;margin-bottom:10px">' +
+        '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">' +
+          '<div style="font-size:14px;font-weight:700">'+stop.sequence+'. '+stop.company+'</div>' +
+          '<span style="background:'+(isDone?'#f0fdf4':isScanned?'#eff6ff':'#f9fafb')+';color:'+(isDone?'#16a34a':isScanned?'#2563eb':'#6b7280')+';padding:3px 8px;border-radius:10px;font-size:11px;font-weight:600">'+(isDone?'✅ Done':isScanned?'📷 Scanned':'⏳ Pending')+'</span>' +
+        '</div>' +
+        '<div style="font-size:12px;color:#6b7280;margin-bottom:8px">'+stop.address+(stop.postCode?', '+stop.postCode:'')+'</div>' +
+        (stop.deliveryInfo?'<div style="font-size:11px;color:#7c3aed;background:#faf5ff;border-radius:5px;padding:6px;margin-bottom:8px">📝 '+stop.deliveryInfo+'</div>':'') +
+        '<div style="font-size:12px;font-weight:600;margin-bottom:10px">📦 '+stop.orderCount+' box'+(stop.orderCount>1?'es to deliver':'  to deliver')+'</div>' +
+        (!isDone ?
+          '<div style="display:flex;gap:8px">' +
+            '<button onclick="openQrScanner('+idx+')" style="flex:1;background:#2563eb;color:#fff;border:none;border-radius:7px;padding:10px;font-size:13px;font-weight:600;cursor:pointer">📷 Scan Box QR</button>' +
+            '<button onclick="confirmStopManual('+idx+')" style="flex:1;background:#16a34a;color:#fff;border:none;border-radius:7px;padding:10px;font-size:13px;font-weight:600;cursor:pointer">✅ Confirm</button>' +
+          '</div>' :
+          '<div style="background:#f0fdf4;border-radius:6px;padding:8px;font-size:12px;color:#16a34a;text-align:center">✅ Delivered</div>'
+        ) +
+      '</div>';
+    }).join('') +
+    '<button onclick="markRouteComplete()" style="width:100%;background:#1a1a2e;color:#fff;border:none;border-radius:8px;padding:14px;font-size:15px;font-weight:700;cursor:pointer;margin-top:8px">🏁 Complete Route</button>';
+}
+
+async function confirmStopManual(stopIdx) {
+  const route = window._driverRoute;
+  if (!route) return;
+  route.stops[stopIdx].status = 'delivered';
+  route.stops[stopIdx].confirmedAt = new Date().toISOString();
+  await window._fbSetDoc(window._fbDoc(window._fbDb,'driverRoutes',route.id), route, {merge:true});
+  _paintDriverRoute();
+}
+
+async function markRouteComplete() {
+  const route = window._driverRoute;
+  if (!route) return;
+  const undone = route.stops.filter(s=>s.status!=='delivered').length;
+  if (undone > 0 && !confirm(undone+' stops not confirmed. Mark route complete anyway?')) return;
+  route.status = 'completed';
+  route.completedAt = new Date().toISOString();
+  await window._fbSetDoc(window._fbDoc(window._fbDb,'driverRoutes',route.id), route, {merge:true});
+  alert('🎉 Route completed! Great work.');
+}
+
+// ── QR SCANNER ────────────────────────────────────────────────
+function openQrScanner(stopIdx) {
+  const existing = document.getElementById('qr-modal');
+  if (existing) existing.remove();
+
+  const mo = document.createElement('div');
+  mo.id = 'qr-modal';
+  mo.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.9);z-index:9999;display:flex;flex-direction:column;align-items:center;justify-content:center';
+  mo.innerHTML =
+    '<div style="color:#fff;font-size:16px;font-weight:700;margin-bottom:12px">📷 Scan Box QR Code</div>' +
+    '<div style="position:relative;width:min(320px,90vw);height:min(320px,90vw);border-radius:12px;overflow:hidden">' +
+      '<video id="qr-video" style="width:100%;height:100%;object-fit:cover" autoplay playsinline></video>' +
+      '<div style="position:absolute;inset:0;border:3px solid #e85d04;border-radius:12px;pointer-events:none"></div>' +
+    '</div>' +
+    '<div id="qr-status" style="color:#e2e8f0;font-size:13px;margin-top:12px;text-align:center">Point camera at QR code on box</div>' +
+    '<button onclick="closeQrScanner()" style="margin-top:16px;background:#ef4444;color:#fff;border:none;border-radius:8px;padding:10px 28px;font-size:14px;cursor:pointer">✕ Cancel</button>';
+
+  document.body.appendChild(mo);
+  window._qrStopIdx = stopIdx;
+  startQrScan();
+}
+
+async function startQrScan() {
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({video:{facingMode:'environment'}});
+    const video = document.getElementById('qr-video');
+    if (!video) return;
+    video.srcObject = stream;
+    window._qrStream = stream;
+
+    // Try to load jsQR for actual QR decoding
+    if (!window.jsQR) {
+      const s = document.createElement('script');
+      s.src = 'https://cdnjs.cloudflare.com/ajax/libs/jsQR/1.4.0/jsQR.min.js';
+      s.onload = () => startQrDecode();
+      document.head.appendChild(s);
+    } else {
+      startQrDecode();
+    }
+  } catch(e) {
+    const status = document.getElementById('qr-status');
+    if (status) status.textContent = '❌ Camera not available: ' + e.message + '. Use manual confirm instead.';
+  }
+}
+
+function startQrDecode() {
+  const video = document.getElementById('qr-video');
+  if (!video || !window.jsQR) return;
+  const canvas = document.createElement('canvas');
+  const ctx = canvas.getContext('2d');
+
+  function tick() {
+    if (!document.getElementById('qr-modal') || !video.readyState === video.HAVE_ENOUGH_DATA) {
+      requestAnimationFrame(tick); return;
+    }
+    canvas.width = video.videoWidth;
+    canvas.height = video.videoHeight;
+    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+    const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+    const code = window.jsQR(imageData.data, imageData.width, imageData.height);
+
+    if (code) {
+      handleQrScan(code.data);
+    } else {
+      requestAnimationFrame(tick);
+    }
+  }
+  video.addEventListener('canplay', () => requestAnimationFrame(tick), {once:true});
+}
+
+async function handleQrScan(qrData) {
+  const route = window._driverRoute;
+  const stopIdx = window._qrStopIdx;
+  if (!route || stopIdx === undefined) return;
+
+  const stop = route.stops[stopIdx];
+  const status = document.getElementById('qr-status');
+
+  // Check if QR matches this stop (by company name or box ID)
+  const companyNorm = (stop.company||'').toLowerCase().replace(/[^a-z0-9]/g,'');
+  const qrNorm = qrData.toLowerCase().replace(/[^a-z0-9]/g,'');
+  const isMatch = qrNorm.includes(companyNorm.substring(0,8)) || companyNorm.includes(qrNorm.substring(0,8)) ||
+                  (stop.boxIds||[]).some(id => qrData.includes(id) || id.includes(qrData.split('-')[2]||''));
+
+  if (isMatch) {
+    if (status) status.innerHTML = '<span style="color:#4ade80">✅ Matched: '+stop.company+'! Box confirmed.</span>';
+    stop.scannedBoxes = [...(stop.scannedBoxes||[]), qrData];
+    stop.status = 'scanned';
+    await window._fbSetDoc(window._fbDoc(window._fbDb,'driverRoutes',route.id), route, {merge:true});
+    setTimeout(() => { closeQrScanner(); _paintDriverRoute(); }, 1500);
+  } else {
+    if (status) status.innerHTML = '<span style="color:#f87171">⚠️ Wrong box! This belongs to another stop.<br><small>Scanned: '+qrData.substring(0,40)+'</small></span>';
+    setTimeout(() => { if (status) status.textContent = 'Point camera at QR code on box'; }, 3000);
+  }
+}
+
+function closeQrScanner() {
+  if (window._qrStream) { window._qrStream.getTracks().forEach(t=>t.stop()); window._qrStream=null; }
+  const mo = document.getElementById('qr-modal');
+  if (mo) mo.remove();
 }
 
 async function planSaveToApp() {
