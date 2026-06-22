@@ -940,6 +940,7 @@ async function renderPlanning() {
     '<button class="btn" style="background:#1a1a2e;color:#fff;border-color:#1a1a2e" onclick="saveWeeklyTemplate()">💾 Save as Weekly Template</button>' +
     '<button class="btn" style="background:#f59e0b;color:#fff;border-color:#f59e0b" onclick="checkPickups()">📦 Check Pickups</button>' +
     '<button class="btn" style="background:#0ea5e9;color:#fff;border-color:#0ea5e9" onclick="openAddStopModal()">➕ Add Stop</button>' +
+    '<button class="btn" style="background:#f59e0b;color:#fff;border-color:#f59e0b" onclick="openAddPickupModal()">📦 Add Pickup</button>' +
   '</div>' +
 
   '<div id="plan-body"><div style="text-align:center;padding:60px;color:#9ca3af">⏳ Loading orders from OMS…</div></div>' +
@@ -1555,6 +1556,65 @@ function clearAndReload(e) {
   loadFromWeeklyTemplate(bodyEl);
 }
 
+function openAddPickupModal() {
+  const existing = document.getElementById('pickup-add-modal');
+  if (existing) existing.remove();
+  const mo = document.createElement('div');
+  mo.className = 'modal-overlay'; mo.id = 'pickup-add-modal';
+  mo.innerHTML =
+    '<div class="modal" style="width:min(460px,95vw)">' +
+    '<button class="modal-close" onclick="this.closest(\'.modal-overlay\').remove()">×</button>' +
+    '<h3>📦 Add Pickup Stop</h3>' +
+    '<p style="font-size:13px;color:#6b7280;margin-bottom:14px">Add a box collection stop — driver goes to pick up empty boxes.</p>' +
+    '<div style="display:flex;flex-direction:column;gap:10px">' +
+      '<div><label style="font-size:12px;font-weight:600">Company / Location *</label>' +
+        '<input id="pu-company" placeholder="e.g. Freshworks GmbH" style="width:100%;border:1px solid #d1d5db;border-radius:6px;padding:7px 10px;font-size:13px;margin-top:3px"></div>' +
+      '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">' +
+        '<div><label style="font-size:12px;font-weight:600">Address</label>' +
+          '<input id="pu-address" placeholder="Straße 1" style="width:100%;border:1px solid #d1d5db;border-radius:6px;padding:7px 10px;font-size:13px;margin-top:3px"></div>' +
+        '<div><label style="font-size:12px;font-weight:600">Post Code</label>' +
+          '<input id="pu-postcode" placeholder="10115" style="width:100%;border:1px solid #d1d5db;border-radius:6px;padding:7px 10px;font-size:13px;margin-top:3px"></div>' +
+      '</div>' +
+      '<div><label style="font-size:12px;font-weight:600">Notes (time, contact…)</label>' +
+        '<input id="pu-notes" placeholder="e.g. Pickup after 14:00 · call +49 171..." style="width:100%;border:1px solid #d1d5db;border-radius:6px;padding:7px 10px;font-size:13px;margin-top:3px"></div>' +
+      '<div><label style="font-size:12px;font-weight:600">Assign to Driver</label>' +
+        '<select id="pu-driver" style="width:100%;border:1px solid #d1d5db;border-radius:6px;padding:7px 10px;font-size:13px;margin-top:3px">' +
+        '<option value="Unassigned">— Unassigned —</option>' +
+        _planDrivers.filter(d=>d!=='Unassigned').map(d=>'<option value="'+d+'">'+d+'</option>').join('') +
+        '</select></div>' +
+    '</div>' +
+    '<div style="display:flex;gap:8px;justify-content:flex-end;margin-top:16px">' +
+      '<button class="btn" onclick="this.closest(\'.modal-overlay\').remove()">Cancel</button>' +
+      '<button class="btn btn-primary" style="background:#f59e0b;border-color:#f59e0b" onclick="addPickupStopManual()">📦 Add Pickup</button>' +
+    '</div>' +
+    '</div>';
+  document.body.appendChild(mo);
+}
+
+function addPickupStopManual() {
+  const company  = document.getElementById('pu-company').value.trim();
+  if (!company) { alert('Company name is required'); return; }
+  const address  = document.getElementById('pu-address').value.trim();
+  const postCode = document.getElementById('pu-postcode').value.trim();
+  const notes    = document.getElementById('pu-notes').value.trim();
+  const driver   = document.getElementById('pu-driver').value;
+
+  const id = 'pickup_manual_' + Date.now();
+  _planStops.push({
+    branchId: id,
+    company: 'Pickup: ' + company,
+    templateName: 'Pickup: ' + company,
+    address, postCode, city: '',
+    deliveryInfo: notes || 'PICKUP EMPTY BOXES',
+    orderCount: 0, hasOrder: true, isManual: true,
+  });
+  _planAssign[id] = driver;
+  if (notes) _planNotes[id] = notes;
+
+  document.getElementById('pickup-add-modal').remove();
+  _paintPlanGrid();
+}
+
 // ── PICKUP DETECTION ──────────────────────────────────────────
 async function checkPickups() {
   if (!window._fbReady || !window._fbDb) { alert('Firebase not ready'); return; }
@@ -1891,19 +1951,30 @@ function parseOmsJson(raw) {
           count:(dish.users||[]).reduce((s,u)=>s+(u.orderedQuantity||0),0) });
       });
     });
+    // Handle BellaBona kitchen/internal entries (null delivery address)
+    const isBBInternal = !branch.deliveryAddress && (
+      (branch.name||'').toLowerCase().includes('bella') ||
+      (branch.name||'').toLowerCase().includes('bellabona') ||
+      (branch.name||'').toLowerCase().includes('kitchen')
+    );
+    const address  = branch.deliveryAddress  || (isBBInternal ? 'BellaBona Kitchen' : '');
+    const postCode = branch.deliveryPostalCode || (isBBInternal ? '14473' : ''); // Potsdam
+    const city     = branch.deliveryCity     || (isBBInternal ? 'Potsdam' : '');
+
     return {
       branchId:    branch.id,
       company:     branch.name,
-      address:     branch.deliveryAddress || '',
-      postCode:    branch.deliveryPostalCode || '',
-      city:        branch.deliveryCity || '',
-      deliveryInfo: branch.deliveryInstructions || '',
-      orderCount:  totalBoxes,
+      address,
+      postCode,
+      city,
+      deliveryInfo: branch.deliveryInstructions || (isBBInternal ? 'BellaBona internal — kitchen stop' : ''),
+      orderCount:  totalBoxes || 1,
       userCount:   uniqueUsers.size,
       readyTime:   branch.readyTime,
       leaveTime:   branch.leaveTime,
       boxes:       branch.boxes || [],
       dishes:      dishes,
+      isBBInternal,
     };
   });
 }
