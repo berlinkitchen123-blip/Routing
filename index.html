@@ -1575,6 +1575,40 @@ async function lockAndDispatch() {
       await window._fbSetDoc(window._fbDoc(window._fbDb, 'driverRoutes', driverKey), route);
     }
 
+    // ── Write to 'deliveries' collection for Android app ──
+    // Collection: deliveries | Fields: id, driverId, qrCode, companyName, address, postalCode, deliveryInstructions, numberOfBoxes, status
+    const writePromises = [];
+    for (const [driver, route] of Object.entries(driverRoutes)) {
+      let driverId = driver;
+      try {
+        const dSnap = await window._fbGetDoc(window._fbDoc(window._fbDb, 'drivers', driver.toLowerCase().replace(/\s+/g,'_')));
+        if (dSnap.exists() && dSnap.data().email) driverId = dSnap.data().email;
+      } catch(e2) {}
+
+      for (const stop of route.stops) {
+        const boxes = stop.boxIds && stop.boxIds.length > 0 ? stop.boxIds : [stop.branchId + '_box0'];
+        for (let i = 0; i < boxes.length; i++) {
+          const qrCode = boxes[i] || (dateStr + '_' + stop.branchId + '_' + i);
+          const docId = (dateStr + '_' + stop.branchId + '_' + i).replace(/[^a-zA-Z0-9_-]/g, '_').substring(0,100);
+          writePromises.push(
+            window._fbSetDoc(window._fbDoc(window._fbDb, 'deliveries', docId), {
+              id: docId, driverId, driverName: driver,
+              qrCode,
+              companyName:          stop.company,
+              address:              stop.address || '',
+              postalCode:           stop.postCode || '',
+              deliveryInstructions: stop.note || stop.deliveryInfo || '',
+              numberOfBoxes:        stop.orderCount || 1,
+              sequence:             stop.sequence || 1,
+              date: dateStr, kitchen, status: 'PENDING', dispatchedAt: now,
+            })
+          );
+        }
+      }
+    }
+    await Promise.all(writePromises);
+    console.log('Android deliveries written:', writePromises.length, 'docs to Firestore deliveries collection');
+
     btn.disabled=false; btn.textContent='🔒 Lock & Dispatch';
     const el = document.getElementById('plan-msg');
     if (el) el.innerHTML = '<div style="background:#fef2f2;border:1px solid #fecaca;border-radius:8px;padding:10px 14px;font-size:13px;color:#dc2626;margin-bottom:8px">🔒 <b>Plan locked & dispatched</b> for '+dateStr+' · '+assigned.length+' drivers notified · <a href="#dispatch" onclick="window.location.hash=\'#dispatch\'" style="color:#dc2626">View Dispatch Monitor →</a></div>';
