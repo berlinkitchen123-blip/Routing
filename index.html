@@ -745,6 +745,123 @@ function toggleRC(i) {
 let _liveDriverMarkers = {};
 let _liveSocket = null;
 
+
+// ════════════════════════════════════════════════════════════
+// GEOCODING — real addresses via Nominatim (OpenStreetMap)
+// Cached in localStorage to avoid repeated API calls
+// ════════════════════════════════════════════════════════════
+const _geoCache = (() => {
+  try { return JSON.parse(localStorage.getItem('_geocache') || '{}'); } catch(e) { return {}; }
+})();
+
+function _saveGeoCache() {
+  try { localStorage.setItem('_geocache', JSON.stringify(_geoCache)); } catch(e) {}
+}
+
+async function geocodeAddress(address, postCode, city) {
+  if (!address) return null;
+  const key = (address + postCode + city).replace(/\s+/g,'').toLowerCase();
+  if (_geoCache[key]) return _geoCache[key];
+
+  // Try full address first, then just postcode+city
+  const queries = [
+    encodeURIComponent(address + ', ' + postCode + ' ' + city + ', Germany'),
+    encodeURIComponent(postCode + ' ' + city + ', Germany'),
+  ];
+
+  for (const q of queries) {
+    try {
+      const r = await fetch(
+        'https://nominatim.openstreetmap.org/search?q='+q+'&format=json&limit=1&countrycodes=de',
+        { headers: { 'Accept-Language': 'de', 'User-Agent': 'BellaBona-LMM/1.0' } }
+      );
+      const data = await r.json();
+      if (data && data[0]) {
+        const coords = [parseFloat(data[0].lat), parseFloat(data[0].lon)];
+        _geoCache[key] = coords;
+        _saveGeoCache();
+        return coords;
+      }
+    } catch(e) {}
+    await new Promise(res => setTimeout(res, 1100)); // Nominatim rate limit: 1 req/sec
+  }
+  return null;
+}
+
+// Batch geocode an array of stops — returns map of branchId → [lat,lng]
+async function geocodeStops(stops) {
+  const results = {};
+  for (const s of stops) {
+    if (!s.address || !s.postCode) continue;
+    const coords = await geocodeAddress(s.address, s.postCode, s.city || '');
+    if (coords) results[s.branchId] = coords;
+  }
+  return results;
+}
+
+// Show planning stops on a real Leaflet map
+async function showPlanningMap() {
+  if (_planStops.length === 0) { alert('Load stops first'); return; }
+  const mapModal = document.getElementById('plan-map-modal');
+  if (mapModal) mapModal.remove();
+
+  const mo = document.createElement('div');
+  mo.id = 'plan-map-modal';
+  mo.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.6);z-index:9999;display:flex;align-items:center;justify-content:center';
+  mo.innerHTML =
+    '<div style="background:#fff;border-radius:12px;width:min(900px,95vw);height:80vh;display:flex;flex-direction:column;overflow:hidden">' +
+      '<div style="display:flex;align-items:center;justify-content:space-between;padding:12px 16px;border-bottom:1px solid #e5e7eb">' +
+        '<h3 style="margin:0;font-size:16px">📍 Route Map — '+_planDate+' ('+_planKitchen+')</h3>' +
+        '<div style="display:flex;gap:8px;align-items:center">' +
+          '<span id="geocode-status" style="font-size:12px;color:#6b7280">Geocoding addresses…</span>' +
+          '<button onclick="document.getElementById(\'plan-map-modal\').remove()" style="background:none;border:none;font-size:20px;cursor:pointer;color:#6b7280">×</button>' +
+        '</div>' +
+      '</div>' +
+      '<div id="plan-real-map" style="flex:1"></div>' +
+    '</div>';
+  document.body.appendChild(mo);
+
+  // Init map
+  await new Promise(res => setTimeout(res, 200));
+  const center = _planKitchen === 'Munich' ? [48.137,11.576] : [52.52,13.405];
+  const planMap = L.map('plan-real-map').setView(center, 12);
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    attribution: '&copy; <a href="https://openstreetmap.org">OpenStreetMap</a>', maxZoom: 18
+  }).addTo(planMap);
+
+  const COL_COLORS = {Samir:'#b45309',Ali1:'#16a34a',Ali2:'#2563eb',Ali:'#16a34a',
+    Jozef:'#dc2626',Josef:'#dc2626',Martin:'#7c3aed',Tasnim:'#c2410c',
+    Packator:'#374151',Packator1:'#374151',Packator2:'#047857',
+    Piyush:'#be185d',Mykhaielo:'#0891b2',Kartik:'#d97706',
+    Yousef:'#7c3aed',Ali3:'#16a34a',Unassigned:'#9ca3af'};
+
+  const statusEl = document.getElementById('geocode-status');
+  const toGeocode = _planStops.filter(s => s.hasOrder !== false && s.address);
+  let done = 0;
+
+  for (const s of toGeocode) {
+    const driver = _planAssign[s.branchId] || 'Unassigned';
+    const color = COL_COLORS[driver] || '#6b7280';
+    const coords = await geocodeAddress(s.address, s.postCode, s.city || '');
+    done++;
+    if (statusEl) statusEl.textContent = `Geocoding… ${done}/${toGeocode.length}`;
+
+    if (coords && document.getElementById('plan-map-modal')) {
+      const sn = shortName(s.company);
+      const note = _planNotes[s.branchId] || '';
+      const icon = L.divIcon({
+        className: '',
+        html: '<div style="background:'+color+';color:#fff;border-radius:4px;padding:2px 6px;font-size:10px;font-weight:700;border:1.5px solid #fff;box-shadow:0 1px 4px rgba(0,0,0,0.4);white-space:nowrap;max-width:120px;overflow:hidden;text-overflow:ellipsis">'+sn+'</div>',
+        iconAnchor: [0, 0]
+      });
+      L.marker(coords, {icon}).addTo(planMap)
+        .bindPopup('<b>'+s.company+'</b><br>Driver: <b>'+driver+'</b><br>'+s.address+', '+s.postCode+'<br>'+(s.orderCount||1)+' orders'+(note?'<br><i>'+note+'</i>':''));
+    }
+  }
+  if (statusEl) statusEl.textContent = `✅ ${done} stops mapped`;
+  planMap.invalidateSize();
+}
+
 function initDashMap(routes) {
   const c = document.getElementById('leaflet-map');
   if(!c||typeof L==='undefined') return;
@@ -754,18 +871,51 @@ function initDashMap(routes) {
   const center = dashboardTab==='Berlin'?[52.52,13.405]:[48.137,11.576];
   leafletMap = L.map('leaflet-map').setView(center,12);
   L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{attribution:'&copy; OpenStreetMap',maxZoom:18}).addTo(leafletMap);
-  const mBase = [[48.134,11.505],[48.155,11.540],[48.126,11.572],[48.140,11.587],[48.112,11.533],[48.107,11.545],[48.103,11.514],[48.109,11.590],[48.116,11.576],[48.138,11.520],[48.145,11.565],[48.125,11.548],[48.160,11.590],[48.120,11.525]];
-  const bBase = [[52.52,13.38],[52.50,13.42],[52.53,13.40],[52.51,13.35],[52.48,13.43],[52.54,13.38],[52.49,13.46]];
-  const bases = dashboardTab==='Berlin'?bBase:dashboardTab==='Munich'?mBase:[...mBase,...bBase];
+  // Show real stop locations from today's plan (if loaded), otherwise show depot
+  const depotBerlin  = [52.4013, 13.0489]; // Potsdam kitchen
+  const depotMunich  = [48.1739, 11.5776]; // Feldkirchen kitchen
+  const depot = dashboardTab==='Munich' ? depotMunich : depotBerlin;
+
+  // Add kitchen depot marker
+  L.marker(depot, {icon: L.divIcon({className:'',
+    html:'<div style="background:#1a1a2e;color:#fff;border-radius:6px;padding:4px 8px;font-size:11px;font-weight:700;border:2px solid #e85d04;box-shadow:0 2px 6px rgba(0,0,0,0.4)">🏭 Kitchen</div>',
+    iconAnchor:[0,0]})}).addTo(leafletMap).bindPopup('<b>BellaBona Kitchen</b><br>'+(dashboardTab==='Munich'?'Kapellenstraße 12, Feldkirchen':'Friedrich-Engels-Str. 28, Potsdam'));
+
+  // If we have a loaded plan, show real geocoded stop positions
+  if (window._planStops && window._planStops.length > 0) {
+    const COL_COLORS = {Samir:'#b45309',Ali1:'#16a34a',Ali2:'#2563eb',Ali:'#16a34a',
+      Jozef:'#dc2626',Josef:'#dc2626',Martin:'#7c3aed',Tasnim:'#c2410c',
+      Packator:'#374151',Packator1:'#374151',Packator2:'#047857',
+      Piyush:'#be185d',Mykhaielo:'#0891b2',Kartik:'#d97706',Yousef:'#7c3aed',Ali3:'#16a34a',Unassigned:'#9ca3af'};
+
+    // Batch geocode asynchronously and add to map as they resolve
+    (async () => {
+      for (const s of window._planStops) {
+        if (!s.address || !leafletMap) continue;
+        const driver = (window._planAssign||{})[s.branchId] || 'Unassigned';
+        const color = COL_COLORS[driver] || '#6b7280';
+        try {
+          const coords = await geocodeAddress(s.address, s.postCode, s.city || '');
+          if (coords && leafletMap) {
+            const sn = shortName(s.company);
+            L.circleMarker(coords, {radius:7, fillColor:color, color:'#fff', weight:2, fillOpacity:0.85})
+              .addTo(leafletMap)
+              .bindPopup('<b>'+s.company+'</b><br>Driver: <b>'+driver+'</b><br>'+s.address+', '+s.postCode+(s.orderCount>1?'<br>'+s.orderCount+' orders':''));
+          }
+        } catch(e) {}
+        await new Promise(res => setTimeout(res, 300));
+      }
+    })();
+  }
+
+  // Driver route labels (from route plan data)
   routes.forEach((r,i)=>{
-    if(i>=bases.length) return;
-    const pos = bases[i];
     const icon = L.divIcon({className:'',html:'<div style="background:'+r.color+';color:#fff;border-radius:50%;width:28px;height:28px;display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:700;border:2px solid #fff;box-shadow:0 1px 4px rgba(0,0,0,0.3)">'+r.name.substring(0,2).toUpperCase()+'</div>',iconSize:[28,28],iconAnchor:[14,14]});
-    L.marker(pos,{icon}).addTo(leafletMap).bindPopup('<b>'+r.name+'</b><br>'+r.stops+' stops &bull; '+r.boxes+' boxes<br>'+r.start+'&rarr;'+r.end);
-    const rng = ()=>(Math.random()-0.5)*0.05;
-    Array.from({length:Math.min(r.stops,5)},()=>[pos[0]+rng(),pos[1]+rng()]).forEach(sp=>{
-      L.circleMarker(sp,{radius:5,fillColor:r.color,color:'#fff',weight:1,fillOpacity:0.8}).addTo(leafletMap);
-    });
+    // Only add label near depot if no real GPS data
+    const offset = [depot[0]+(i%4)*0.02-0.03, depot[1]+(Math.floor(i/4))*0.03-0.03];
+    if (!_liveDriverMarkers[r.name]) {
+      L.marker(offset,{icon,opacity:0.5}).addTo(leafletMap).bindPopup('<b>'+r.name+'</b><br>'+r.stops+' stops &bull; '+r.boxes+' boxes');
+    }
   });
 
   // Live GPS: fetch initial positions (skip when no local server)
@@ -922,6 +1072,7 @@ async function renderPlanning() {
     '<button class="btn" style="background:#10b981;color:#fff;border-color:#10b981" onclick="planSaveToApp()">💾 Save → Driver App</button>' +
     '<button class="btn" style="background:#217346;color:#fff;border-color:#217346" onclick="planExportExcel()">📊 Export Excel</button>' +
     '<button class="btn" style="background:#25d366;color:#fff;border-color:#25d366" onclick="planWhatsApp()">💬 WhatsApp</button>' +
+    '<button class="btn" style="background:#0ea5e9;color:#fff;border-color:#0ea5e9" onclick="showPlanningMap()">📍 Map View</button>' +
     '<button class="btn" style="background:#1a1a2e;color:#fff;border-color:#1a1a2e" onclick="saveWeeklyTemplate()">💾 Save as Weekly Template</button>' +
     '<button class="btn" style="background:#f59e0b;color:#fff;border-color:#f59e0b" onclick="checkPickups()">📦 Check Pickups</button>' +
     '<button class="btn" style="background:#0ea5e9;color:#fff;border-color:#0ea5e9" onclick="openAddStopModal()">➕ Add Stop</button>' +
