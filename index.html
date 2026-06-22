@@ -873,6 +873,13 @@ async function planAutoAssign(silent=false) {
 
 async function planLastWeek() {
   const btn = event.target; btn.disabled=true; btn.textContent='Loading last week…';
+  // Cloud mode — use Firestore weekly template instead of local server
+  if (!API_BASE) {
+    const bodyEl = document.getElementById('plan-body');
+    await loadFromWeeklyTemplate(bodyEl);
+    btn.disabled=false; btn.textContent='📅 Use Last Week';
+    return;
+  }
   try {
     const r = await fetch(`${API_BASE}/api/planning/last-week?date=${_planDate}&kitchen=${_planKitchen}`);
     const d = await r.json();
@@ -1364,15 +1371,17 @@ async function importJsonData() {
       _planDate = dateMatch[0];
       document.getElementById('plan-date').value = _planDate;
     }
-    // Auto-assign by zone
-    await planAutoAssign(true);
     document.querySelector('.modal-overlay').remove();
-    // Show enriched grid with dish details
-    _paintPlanGrid();
-    // Show success
+    // Try to apply weekly template (auto-assigns to drivers, colors red if no order)
     const bodyEl = document.getElementById('plan-body');
-    const banner = '<div style="background:#f0fdf4;border:1px solid #bbf7d0;border-radius:8px;padding:8px 14px;font-size:13px;color:#16a34a;margin-bottom:8px">✅ <b>'+stops.length+' companies · '+stops.reduce((s,r)=>s+r.orderCount,0)+' boxes · '+stops.reduce((s,r)=>s+r.userCount,0)+' users</b> imported from Bella-Bona JSON</div>';
-    if (bodyEl) bodyEl.insertAdjacentHTML('afterbegin', banner);
+    if (!API_BASE && window._fbReady) {
+      await loadFromWeeklyTemplate(bodyEl);
+    } else {
+      await planAutoAssign(true);
+      _paintPlanGrid();
+      const banner = '<div style="background:#f0fdf4;border:1px solid #bbf7d0;border-radius:8px;padding:8px 14px;font-size:13px;color:#16a34a;margin-bottom:8px">✅ <b>'+stops.length+' companies · '+stops.reduce((s,r)=>s+r.orderCount,0)+' boxes · '+stops.reduce((s,r)=>s+r.userCount,0)+' users</b> imported from Bella-Bona JSON</div>';
+      if (bodyEl) bodyEl.insertAdjacentHTML('afterbegin', banner);
+    }
   } catch(e) {
     alert('Import failed: '+e.message);
   }
