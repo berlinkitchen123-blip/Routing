@@ -977,7 +977,7 @@ async function loadFromWeeklyTemplate(bodyEl) {
   const DAY_NAMES = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
   const dayName = DAY_NAMES[new Date(_planDate + 'T12:00:00').getDay()];
 
-  if(bodyEl) bodyEl.innerHTML = '<div style="text-align:center;padding:40px;color:#9ca3af">⏳ Loading weekly template for '+dayName+'…</div>';
+  if(bodyEl) bodyEl.innerHTML = '<div style="text-align:center;padding:40px;color:#9ca3af">⏳ Loading plan for '+_planDate+'…</div>';
 
   if (!window._fbReady || !window._fbDb) {
     if(bodyEl) bodyEl.innerHTML = '<div style="background:#fffbeb;border:1px solid #fde68a;border-radius:8px;padding:14px;color:#92400e;font-size:13px">⏳ Firebase loading, please try again in a moment.</div>';
@@ -985,6 +985,40 @@ async function loadFromWeeklyTemplate(bodyEl) {
   }
 
   try {
+    // ── Step 1: Check for a saved daily plan for this exact date ──
+    const planKey = _planDate + '_' + _planKitchen;
+    const savedSnap = await window._fbGetDoc(window._fbDoc(window._fbDb, 'dailyPlans', planKey));
+    if (savedSnap.exists()) {
+      const saved = savedSnap.data();
+      const assignments = saved.assignments || [];
+      // Restore stops
+      _planStops = assignments.map(a => ({
+        branchId:    a.branchId,    company:     a.company,
+        address:     a.address,     postCode:    a.postCode,
+        city:        a.city||'',    deliveryInfo:a.deliveryInfo||'',
+        orderCount:  a.orderCount||1, hasOrder:  a.hasOrder !== false,
+        isManual:    a.isManual||false,
+        templateName: a.templateName || a.company,
+      }));
+      // Restore assignments & notes
+      _planAssign = {};
+      assignments.forEach(a => { _planAssign[a.branchId] = a.courier||'Unassigned'; });
+      _planNotes  = saved.notes || {};
+      _planDrivers = saved.drivers || [...new Set(assignments.map(a=>a.courier).filter(Boolean))].filter(d=>d!=='Unassigned').sort();
+      // Also load weekly template for dispatcher names
+      const tmplSnap = await window._fbGetDoc(window._fbDoc(window._fbDb, 'weeklyTemplates', dayName));
+      if (tmplSnap.exists()) _weeklyTemplate = tmplSnap.data();
+      const savedAt = saved.savedAt ? new Date(saved.savedAt).toLocaleString('de-DE',{day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'}) : '';
+      if(bodyEl) bodyEl.innerHTML =
+        '<div style="background:#f0fdf4;border:1px solid #bbf7d0;border-radius:8px;padding:8px 14px;font-size:13px;color:#16a34a;margin-bottom:8px">' +
+        '✅ <b>Saved plan restored</b> for '+_planDate+' ('+_planKitchen+') &nbsp;·&nbsp; '+_planStops.length+' stops' +
+        (savedAt ? ' &nbsp;·&nbsp; last saved '+savedAt : '') +
+        ' &nbsp;·&nbsp; <a href="#" onclick="clearAndReload(event)" style="color:#16a34a;text-decoration:underline">Clear & reload fresh</a></div>';
+      _paintPlanGrid();
+      return;
+    }
+
+    // ── Step 2: No saved plan — fall back to weekly template ──
     const snap = await window._fbGetDoc(window._fbDoc(window._fbDb, 'weeklyTemplates', dayName));
     if (!snap.exists()) {
       if(bodyEl) bodyEl.innerHTML =
@@ -1357,6 +1391,19 @@ async function planSaveToApp() {
     if(el) el.innerHTML='<div style="background:#f0fdf4;border:1px solid #bbf7d0;border-radius:8px;padding:10px 14px;font-size:13px;color:#16a34a;margin-bottom:8px">✅ Plan saved to Firebase for '+_planDate+' ('+_planKitchen+')</div>';
   } catch(e) { alert('Save error: '+e.message); }
   btn.disabled=false; btn.textContent='💾 Save → Driver App';
+}
+
+function clearAndReload(e) {
+  e.preventDefault();
+  if (!confirm('Clear the saved plan for '+_planDate+' and reload fresh from weekly template?')) return;
+  if (window._fbReady && window._fbDb) {
+    window._fbDoc(window._fbDb,'dailyPlans',_planDate+'_'+_planKitchen);
+    // Delete by setting empty — Firestore doesn't have delete in this SDK version
+    window._fbSetDoc(window._fbDoc(window._fbDb,'dailyPlans',_planDate+'_'+_planKitchen), {cleared:true, clearedAt:new Date().toISOString()});
+  }
+  _planStops=[]; _planAssign={}; _planNotes={}; _planDrivers=[];
+  const bodyEl = document.getElementById('plan-body');
+  loadFromWeeklyTemplate(bodyEl);
 }
 
 // ── PICKUP DETECTION ──────────────────────────────────────────
