@@ -789,6 +789,8 @@ async function renderPlanning() {
     '<button class="btn" style="background:#217346;color:#fff;border-color:#217346" onclick="planExportExcel()">📊 Export Excel</button>' +
     '<button class="btn" style="background:#25d366;color:#fff;border-color:#25d366" onclick="planWhatsApp()">💬 WhatsApp</button>' +
     '<button class="btn" style="background:#1a1a2e;color:#fff;border-color:#1a1a2e" onclick="saveWeeklyTemplate()">💾 Save as Weekly Template</button>' +
+    '<button class="btn" style="background:#f59e0b;color:#fff;border-color:#f59e0b" onclick="checkPickups()">📦 Check Pickups</button>' +
+    '<button class="btn" style="background:#0ea5e9;color:#fff;border-color:#0ea5e9" onclick="openAddStopModal()">➕ Add Stop</button>' +
   '</div>' +
 
   '<div id="plan-body"><div style="text-align:center;padding:60px;color:#9ca3af">⏳ Loading orders from OMS…</div></div>' +
@@ -1370,21 +1372,201 @@ async function planSaveToApp() {
   try {
     const assignments = _planStops.map(s => ({
       branchId: s.branchId, company: s.company, address: s.address,
-      postCode: s.postCode, city: s.city, deliveryInfo: s.deliveryInfo,
-      orderCount: s.orderCount, courier: _planAssign[s.branchId]||'Unassigned',
-      notes: _planNotes[s.branchId]||null,
-    })).filter(a => a.courier !== 'Unassigned');
+      postCode: s.postCode, city: s.city||'', deliveryInfo: s.deliveryInfo||'',
+      orderCount: s.orderCount||1, courier: _planAssign[s.branchId]||'Unassigned',
+      notes: _planNotes[s.branchId]||null, isManual: s.isManual||false,
+      hasOrder: s.hasOrder!==false,
+    }));
 
-    const r = await fetch(`${API_BASE}/api/planning/save`, {
-      method:'POST', headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({ date:_planDate, kitchen:_planKitchen, assignments }),
-    });
-    const d = await r.json();
-    if(!r.ok) throw new Error(d.error||'Failed');
+    // Always save to Firestore (cloud mode primary storage)
+    if (window._fbReady && window._fbDb) {
+      await window._fbSetDoc(window._fbDoc(window._fbDb, 'dailyPlans', _planDate + '_' + _planKitchen), {
+        date: _planDate, kitchen: _planKitchen,
+        savedAt: new Date().toISOString(),
+        assignments,
+        notes: _planNotes,
+        drivers: _planDrivers,
+      });
+    }
+
+    // Also try local server if configured
+    if (API_BASE) {
+      const r = await fetch(`${API_BASE}/api/planning/save`, {
+        method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({ date:_planDate, kitchen:_planKitchen, assignments }),
+      });
+      const d = await r.json();
+      if(!r.ok) throw new Error(d.error||'Failed');
+    }
+
     const el = document.getElementById('plan-msg');
-    if(el) el.innerHTML='<div style="background:#f0fdf4;border:1px solid #bbf7d0;border-radius:8px;padding:10px 14px;font-size:13px;color:#16a34a;margin-bottom:8px">✅ '+d.message+'</div>';
-  } catch(e) { alert('Error: '+e.message); }
+    if(el) el.innerHTML='<div style="background:#f0fdf4;border:1px solid #bbf7d0;border-radius:8px;padding:10px 14px;font-size:13px;color:#16a34a;margin-bottom:8px">✅ Plan saved to Firebase for '+_planDate+' ('+_planKitchen+')</div>';
+  } catch(e) { alert('Save error: '+e.message); }
   btn.disabled=false; btn.textContent='💾 Save → Driver App';
+}
+
+// ── PICKUP DETECTION ──────────────────────────────────────────
+async function checkPickups() {
+  if (!window._fbReady || !window._fbDb) { alert('Firebase not ready'); return; }
+  const btn = event.target; btn.disabled=true; btn.textContent='Checking…';
+
+  const DAY_NAMES = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
+  const todayDate  = new Date(_planDate + 'T12:00:00');
+  const yestDate   = new Date(todayDate); yestDate.setDate(yestDate.getDate()-1);
+  const tmrwDate   = new Date(todayDate); tmrwDate.setDate(tmrwDate.getDate()+1);
+  const todayDay   = DAY_NAMES[todayDate.getDay()];
+  const yestDay    = DAY_NAMES[yestDate.getDay()];
+  const tmrwDay    = DAY_NAMES[tmrwDate.getDay()];
+
+  try {
+    // Load templates for yesterday, today, tomorrow
+    const [ySnap, tSnap, mSnap] = await Promise.all([
+      window._fbGetDoc(window._fbDoc(window._fbDb,'weeklyTemplates',yestDay)),
+      window._fbGetDoc(window._fbDoc(window._fbDb,'weeklyTemplates',todayDay)),
+      window._fbGetDoc(window._fbDoc(window._fbDb,'weeklyTemplates',tmrwDay)),
+    ]);
+
+    const yest  = ySnap.exists()  ? ySnap.data()  : null;
+    const today = tSnap.exists()  ? tSnap.data()  : null;
+    const tmrw  = mSnap.exists()  ? mSnap.data()  : null;
+
+    if (!yest) { alert('No template found for ' + yestDay + '. Cannot determine pickups.'); btn.disabled=false; btn.textContent='📦 Check Pickups'; return; }
+
+    // All companies that had delivery YESTERDAY
+    const yestCompanies = new Set(Object.values(yest.routes||{}).flat().map(c=>c.toLowerCase().trim()));
+    // Companies delivering TODAY (no pickup needed — driver collects when delivering)
+    const todayCompanies = new Set(Object.values((today&&today.routes)||{}).flat().map(c=>c.toLowerCase().trim()));
+    // Companies delivering TOMORROW (no pickup needed — wait for tomorrow's driver)
+    const tmrwCompanies  = new Set(Object.values((tmrw&&tmrw.routes)||{}).flat().map(c=>c.toLowerCase().trim()));
+
+    // PICKUP NEEDED: had delivery yesterday AND not today AND not tomorrow
+    const pickupNeeded = [];
+    yestCompanies.forEach(comp => {
+      if (!comp.startsWith('pickup') && !todayCompanies.has(comp) && !tmrwCompanies.has(comp)) {
+        // Find full name from yesterday's template
+        const fullName = Object.values(yest.routes||{}).flat().find(c=>c.toLowerCase().trim()===comp) || comp;
+        pickupNeeded.push(fullName);
+      }
+    });
+
+    if (pickupNeeded.length === 0) {
+      alert('No pickups needed for ' + todayDay + '. All companies from ' + yestDay + ' are ordering today or tomorrow.');
+      btn.disabled=false; btn.textContent='📦 Check Pickups'; return;
+    }
+
+    // Show pickup modal
+    const existing = document.getElementById('pickup-modal');
+    if (existing) existing.remove();
+    const mo = document.createElement('div');
+    mo.className = 'modal-overlay'; mo.id = 'pickup-modal';
+    mo.innerHTML =
+      '<div class="modal" style="width:min(600px,95vw);max-height:85vh;overflow-y:auto">' +
+        '<button class="modal-close" onclick="this.closest(\'.modal-overlay\').remove()">×</button>' +
+        '<h3>📦 Box Pickup Needed — ' + todayDay + '</h3>' +
+        '<p style="font-size:13px;color:#6b7280;margin-bottom:12px">These companies had delivery on <b>' + yestDay + '</b> but are <b>not ordering today or tomorrow</b> — driver must collect empty boxes:</p>' +
+        '<div style="display:flex;flex-direction:column;gap:6px;margin-bottom:16px">' +
+        pickupNeeded.map((c,i) => {
+          const safeC = c.replace(/'/g,'\'');
+          return '<div style="display:flex;align-items:center;justify-content:space-between;background:#fef9c3;border:1px solid #fde68a;border-radius:6px;padding:8px 12px">' +
+            '<span style="font-size:13px;font-weight:600">📦 ' + c + '</span>' +
+            '<select onchange="if(this.value)addPickupStop(\'' + safeC + '\',this.value)" style="border:1px solid #d1d5db;border-radius:5px;padding:4px 8px;font-size:12px">' +
+            '<option value="">Assign to driver…</option>' +
+            _planDrivers.filter(d=>d!=='Unassigned').map(d=>'<option value="'+d+'">'+d+'</option>').join('') +
+            '</select>' +
+          '</div>';
+        }).join('') +
+        '</div>' +
+        '<div style="font-size:12px;color:#6b7280">💡 Select a driver for each pickup to add it to their route. Then drag to the correct position.</div>' +
+      '</div>';
+    document.body.appendChild(mo);
+  } catch(e) { alert('Error: '+e.message); }
+  btn.disabled=false; btn.textContent='📦 Check Pickups';
+}
+
+function addPickupStop(company, driver) {
+  const id = 'pickup_' + company.replace(/[^a-zA-Z0-9]/g,'_') + '_' + Date.now();
+  _planStops.push({
+    branchId: id, company: 'Pickup: ' + company,
+    templateName: 'Pickup: ' + company,
+    address: '', postCode: '', deliveryInfo: 'PICKUP EMPTY BOXES',
+    orderCount: 0, hasOrder: true, isManual: true,
+  });
+  _planAssign[id] = driver;
+  _paintPlanGrid();
+  const mo = document.getElementById('pickup-modal');
+  if (mo) mo.remove();
+}
+
+// ── MANUAL STOP ENTRY ─────────────────────────────────────────
+function openAddStopModal() {
+  const existing = document.getElementById('add-stop-modal');
+  if (existing) existing.remove();
+  const mo = document.createElement('div');
+  mo.className = 'modal-overlay'; mo.id = 'add-stop-modal';
+  mo.innerHTML =
+    '<div class="modal" style="width:min(500px,95vw)">' +
+      '<button class="modal-close" onclick="this.closest(\'.modal-overlay\').remove()">×</button>' +
+      '<h3>➕ Add Custom Stop</h3>' +
+      '<p style="font-size:13px;color:#6b7280;margin-bottom:16px">Add a manual delivery, catering order, or any custom stop to today\'s plan.</p>' +
+      '<div style="display:flex;flex-direction:column;gap:10px">' +
+        '<div><label style="font-size:12px;font-weight:600;color:#374151">Company / Customer Name *</label>' +
+          '<input id="ms-company" placeholder="e.g. Event GmbH" style="width:100%;border:1px solid #d1d5db;border-radius:6px;padding:7px 10px;font-size:13px;margin-top:3px"></div>' +
+        '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">' +
+          '<div><label style="font-size:12px;font-weight:600;color:#374151">Address</label>' +
+            '<input id="ms-address" placeholder="Straße 1" style="width:100%;border:1px solid #d1d5db;border-radius:6px;padding:7px 10px;font-size:13px;margin-top:3px"></div>' +
+          '<div><label style="font-size:12px;font-weight:600;color:#374151">Post Code</label>' +
+            '<input id="ms-postcode" placeholder="10115" style="width:100%;border:1px solid #d1d5db;border-radius:6px;padding:7px 10px;font-size:13px;margin-top:3px"></div>' +
+        '</div>' +
+        '<div><label style="font-size:12px;font-weight:600;color:#374151">City</label>' +
+          '<input id="ms-city" placeholder="Berlin" style="width:100%;border:1px solid #d1d5db;border-radius:6px;padding:7px 10px;font-size:13px;margin-top:3px"></div>' +
+        '<div><label style="font-size:12px;font-weight:600;color:#374151">Timing / Delivery Notes</label>' +
+          '<textarea id="ms-notes" placeholder="e.g. Deliver at 11:30, contact: +49 171..." style="width:100%;border:1px solid #d1d5db;border-radius:6px;padding:7px 10px;font-size:13px;margin-top:3px;height:70px;resize:vertical"></textarea></div>' +
+        '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">' +
+          '<div><label style="font-size:12px;font-weight:600;color:#374151">Number of Boxes</label>' +
+            '<input id="ms-boxes" type="number" min="1" value="1" style="width:100%;border:1px solid #d1d5db;border-radius:6px;padding:7px 10px;font-size:13px;margin-top:3px"></div>' +
+          '<div><label style="font-size:12px;font-weight:600;color:#374151">Assign to Driver</label>' +
+            '<select id="ms-driver" style="width:100%;border:1px solid #d1d5db;border-radius:6px;padding:7px 10px;font-size:13px;margin-top:3px">' +
+            '<option value="Unassigned">— Unassigned —</option>' +
+            _planDrivers.filter(d=>d!=='Unassigned').map(d=>'<option value="'+d+'">'+d+'</option>').join('') +
+            '</select></div>' +
+        '</div>' +
+      '</div>' +
+      '<div style="display:flex;gap:8px;justify-content:flex-end;margin-top:18px">' +
+        '<button class="btn" onclick="this.closest(\'.modal-overlay\').remove()">Cancel</button>' +
+        '<button class="btn btn-primary" onclick="addManualStop()">➕ Add to Plan</button>' +
+      '</div>' +
+    '</div>';
+  document.body.appendChild(mo);
+}
+
+function addManualStop() {
+  const company  = document.getElementById('ms-company').value.trim();
+  if (!company) { alert('Company name is required'); return; }
+  const address  = document.getElementById('ms-address').value.trim();
+  const postCode = document.getElementById('ms-postcode').value.trim();
+  const city     = document.getElementById('ms-city').value.trim();
+  const notes    = document.getElementById('ms-notes').value.trim();
+  const boxes    = parseInt(document.getElementById('ms-boxes').value)||1;
+  const driver   = document.getElementById('ms-driver').value;
+
+  const id = 'manual_' + Date.now();
+  _planStops.push({
+    branchId: id, company, templateName: company,
+    address, postCode, city,
+    deliveryInfo: notes, orderCount: boxes,
+    hasOrder: true, isManual: true,
+  });
+  _planAssign[id] = driver;
+  if (notes) _planNotes[id] = notes;
+
+  document.getElementById('add-stop-modal').remove();
+  _paintPlanGrid();
+
+  const bodyEl = document.getElementById('plan-body');
+  const msg = bodyEl && bodyEl.querySelector('#plan-msg');
+  if (msg) {
+    msg.innerHTML += '<div style="background:#dbeafe;border:1px solid #93c5fd;border-radius:6px;padding:6px 12px;font-size:12px;color:#1d4ed8;margin-top:4px">➕ Added: <b>' + company + '</b> → ' + driver + '</div>';
+  }
 }
 
 function planExportExcel() {
