@@ -1094,107 +1094,150 @@ function _paintPlanGrid() {
   if (_planStops.length === 0) return;
 
   _planStops.forEach(s => { if (!_planAssign[s.branchId]) _planAssign[s.branchId] = 'Unassigned'; });
-  // Preserve template order if available, otherwise sort
   if (_weeklyTemplate && _weeklyTemplate.drivers) {
     _planDrivers = [..._weeklyTemplate.drivers];
-    const extras = [...new Set(Object.values(_planAssign))].filter(d=>d!=='Unassigned'&&!_planDrivers.includes(d));
+    const extras = [...new Set(Object.values(_planAssign))].filter(d => d !== 'Unassigned' && !_planDrivers.includes(d));
     _planDrivers.push(...extras);
   } else {
-    _planDrivers = [...new Set(Object.values(_planAssign))].filter(d=>d!=='Unassigned').sort();
+    _planDrivers = [...new Set(Object.values(_planAssign))].filter(d => d !== 'Unassigned').sort();
   }
-  const hasUnassigned = _planStops.some(s=>_planAssign[s.branchId]==='Unassigned');
-  const allDrivers = hasUnassigned ? ['Unassigned',..._planDrivers] : [..._planDrivers];
+  const hasUnassigned = _planStops.some(s => _planAssign[s.branchId] === 'Unassigned');
+  const allDrivers = hasUnassigned ? ['Unassigned', ..._planDrivers] : [..._planDrivers];
 
-  // Build per-driver stop lists
   const colStops = {};
-  allDrivers.forEach(d => { colStops[d] = _planStops.filter(s=>_planAssign[s.branchId]===d); });
-  const maxRows = Math.max(...allDrivers.map(d=>colStops[d].length), 1);
+  allDrivers.forEach(d => { colStops[d] = _planStops.filter(s => _planAssign[s.branchId] === d); });
+  const maxRows = Math.max(...allDrivers.map(d => colStops[d].length), 1);
 
-  const COLORS = {
-    'Samir':'#fde68a','Ali1':'#bbf7d0','Ali2':'#bfdbfe','Ali':'#bbf7d0',
-    'Jozef':'#fecaca','Josef':'#fecaca','Martin':'#ddd6fe','Tasnim':'#fed7aa',
-    'Packator':'#e5e7eb','Packator1':'#e5e7eb','Packator2':'#d1fae5',
-    'Piyush':'#fce7f3','Mykhaielo':'#cffafe','Kartik':'#fef3c7',
-    'Yousef':'#ede9fe','Ali3':'#d1fae5','Unassigned':'#fef9c3'
+  const COL_COLORS = {
+    Samir:'#fde68a', Ali1:'#bbf7d0', Ali2:'#bfdbfe', Ali:'#bbf7d0',
+    Jozef:'#fecaca', Josef:'#fecaca', Martin:'#ddd6fe', Tasnim:'#fed7aa',
+    Packator:'#e5e7eb', Packator1:'#e5e7eb', Packator2:'#d1fae5',
+    Piyush:'#fce7f3', Mykhaielo:'#cffafe', Kartik:'#fef3c7',
+    Yousef:'#ede9fe', Ali3:'#d1fae5', Unassigned:'#fef9c3'
   };
-
-  const col = (driver) => COLORS[driver] || (DRIVER_COLORS&&DRIVER_COLORS[driver]) || '#f3f4f6';
-
-  // Build TABLE — each column = 1 driver, each row = 1 stop
-  let tbl = '<table style="border-collapse:collapse;table-layout:fixed;min-width:' + (allDrivers.length * 155) + 'px">';
-
-  // Header row — driver names
-  tbl += '<thead><tr>';
-  allDrivers.forEach(driver => {
-    const stops = colStops[driver];
-    const isUnassigned = driver === 'Unassigned';
-    tbl += '<th ondragover="event.preventDefault()" ondrop="_planDrop(this,event)" data-driver="' + driver + '" ' +
-      'style="background:' + col(driver) + ';border:2px solid #111;padding:7px 10px;font-size:13px;' +
-      'font-weight:700;text-align:center;min-width:150px;width:155px;position:relative;cursor:default">' +
-      (isUnassigned ? '⚠️ New Stops' : driver) +
-      '<br><span style="font-size:10px;font-weight:400;color:#374151">' + stops.length + ' stops</span>' +
-      '</th>';
-  });
-  tbl += '<th style="background:#f9fafb;border:2px solid #111;width:50px;text-align:center;vertical-align:middle">' +
-    '<button onclick="planAddDriver()" style="background:#1a1a2e;color:#fff;border:none;border-radius:4px;padding:4px 6px;cursor:pointer;font-size:11px">+Driver</button></th>';
-  tbl += '</tr></thead>';
-
-  // Body rows — stops
-  tbl += '<tbody>';
-  for (let i = 0; i < maxRows; i++) {
-    tbl += '<tr>';
-    allDrivers.forEach(driver => {
-      const s = colStops[driver][i];
-      if (!s) {
-        tbl += '<td ondragover="event.preventDefault()" ondrop="_planDrop(this,event)" data-driver="' + driver + '" ' +
-          'style="border:1px solid #d1d5db;padding:4px;background:#fafafa;min-height:28px"></td>';
-        return;
-      }
-      const sn = shortName(s.company);
-      const note = _planNotes[s.branchId] || '';
-      const noOrder = s.hasOrder === false;
-      const isPickup = (s.templateName||s.company).toLowerCase().startsWith('pickup');
-      let bg = '#fff', color = '#111', decoration = '';
-      if (noOrder)    { bg='#fee2e2'; color='#b91c1c'; decoration='text-decoration:line-through;'; }
-      else if (isPickup) { bg='#f0fdf4'; color='#166534'; }
-      else if (note)  { bg='#faf5ff'; }
-      tbl += '<td class="plan-stop" draggable="true" data-id="' + s.branchId + '" ' +
-        'ondragover="event.preventDefault()" ondrop="_planDrop(this,event)" data-driver="' + driver + '" ' +
-        'ondragstart="planDragStart(event,this.dataset.id)" ' +
-        'style="border:1px solid #d1d5db;padding:5px 7px;font-size:12px;cursor:grab;' +
-        'background:' + bg + ';color:' + color + ';' + decoration + '" ' +
-        'title="' + s.company + '&#10;' + s.address + ', ' + s.postCode + '&#10;' + (noOrder?'❌ No order today':s.orderCount+' orders') + '">' +
-        '<div style="display:flex;justify-content:space-between;align-items:center;gap:3px">' +
-          '<span style="font-weight:' + (noOrder?'400':'600') + '">' + (noOrder?'❌ ':'') + sn + (s.orderCount>1?' ('+s.orderCount+')':'') + '</span>' +
-          '<span onclick="planEditNote('' + s.branchId + '','' + sn.replace(/'/g,"\'") + '')" style="cursor:pointer;color:#9ca3af;font-size:10px;flex-shrink:0">✎</span>' +
-        '</div>' +
-        (note ? '<div style="font-size:10px;color:#7c3aed;margin-top:2px;font-style:italic">' + note + '</div>' : '') +
-        '</td>';
-    });
-    tbl += '<td style="border:1px solid #e5e7eb;background:#f9fafb"></td></tr>';
-  }
-  tbl += '</tbody>';
-
-  // Footer row — dispatcher names
+  const colColor = d => COL_COLORS[d] || (DRIVER_COLORS && DRIVER_COLORS[d]) || '#f3f4f6';
   const dispatchers = (_weeklyTemplate && _weeklyTemplate.dispatchers) || [];
-  tbl += '<tfoot><tr>';
-  allDrivers.forEach((driver, i) => {
-    const dispName = dispatchers[_planDrivers.indexOf(driver)] || '—';
-    tbl += '<td style="background:#1a1a2e;color:#fff;border:2px solid #111;padding:6px 10px;' +
-      'font-weight:700;font-size:12px;text-align:center">' + dispName + '</td>';
+
+  // Build table using DOM to avoid all string escaping issues
+  const wrapper = document.createElement('div');
+  wrapper.style.cssText = 'overflow-x:auto;padding-bottom:16px';
+
+  const table = document.createElement('table');
+  table.style.cssText = 'border-collapse:collapse;table-layout:fixed';
+
+  // HEADER ROW
+  const thead = table.createTHead();
+  const hRow = thead.insertRow();
+  allDrivers.forEach(driver => {
+    const th = document.createElement('th');
+    th.style.cssText = 'background:' + colColor(driver) + ';border:2px solid #111;padding:7px 10px;font-size:13px;font-weight:700;text-align:center;min-width:150px;width:160px;cursor:default;white-space:nowrap';
+    th.dataset.driver = driver;
+    th.setAttribute('ondragover', 'event.preventDefault()');
+    th.setAttribute('ondrop', '_planDrop(this,event)');
+    const cnt = colStops[driver].length;
+    th.innerHTML = (driver === 'Unassigned' ? '&#9888; New Stops' : driver) +
+      '<br><span style="font-size:10px;font-weight:400;color:#374151">' + cnt + ' stops</span>';
+    hRow.appendChild(th);
   });
-  tbl += '<td style="background:#1a1a2e;border:2px solid #111"></td></tr></tfoot>';
-  tbl += '</table>';
+  // +Driver button column
+  const thAdd = document.createElement('th');
+  thAdd.style.cssText = 'background:#f9fafb;border:2px solid #111;width:50px;text-align:center;vertical-align:middle';
+  const addBtn = document.createElement('button');
+  addBtn.textContent = '+Driver';
+  addBtn.style.cssText = 'background:#1a1a2e;color:#fff;border:none;border-radius:4px;padding:4px 6px;cursor:pointer;font-size:11px';
+  addBtn.onclick = planAddDriver;
+  thAdd.appendChild(addBtn);
+  hRow.appendChild(thAdd);
 
-  // Unassigned section header
-  const unassignedCount = hasUnassigned ? colStops['Unassigned'].length : 0;
+  // BODY ROWS
+  const tbody = table.createTBody();
+  for (let i = 0; i < maxRows; i++) {
+    const row = tbody.insertRow();
+    allDrivers.forEach(driver => {
+      const td = document.createElement('td');
+      td.style.cssText = 'border:1px solid #d1d5db;padding:5px 7px;font-size:12px;min-width:150px;width:160px';
+      td.dataset.driver = driver;
+      td.setAttribute('ondragover', 'event.preventDefault()');
+      td.setAttribute('ondrop', '_planDrop(this,event)');
 
-  document.getElementById('plan-body').innerHTML =
-    '<div id="plan-msg" style="margin-bottom:8px"></div>' +
-    '<div style="overflow-x:auto;padding-bottom:16px;background:#f8fafc;border-radius:8px;padding:12px">' +
-      tbl +
-    '</div>' +
-    '<div style="margin-top:10px;font-size:12px;color:#6b7280">💡 Drag stops between columns · ✎ add notes · ❌ red = no order today · top row = driver · bottom row = dispatcher</div>';
+      const s = colStops[driver][i];
+      if (s) {
+        td.draggable = true;
+        td.dataset.id = s.branchId;
+        td.setAttribute('ondragstart', 'planDragStart(event,this.dataset.id)');
+
+        const noOrder = s.hasOrder === false;
+        const isPickup = (s.templateName || s.company).toLowerCase().startsWith('pickup');
+        const note = _planNotes[s.branchId] || '';
+
+        if (noOrder)       { td.style.background = '#fee2e2'; td.style.color = '#b91c1c'; td.style.textDecoration = 'line-through'; td.style.opacity = '0.8'; }
+        else if (isPickup) { td.style.background = '#f0fdf4'; td.style.color = '#166534'; }
+        else if (note)     { td.style.background = '#faf5ff'; }
+        else               { td.style.background = '#fff'; }
+
+        const sn = shortName(s.company);
+        const cnt = s.orderCount > 1 ? ' (' + s.orderCount + ')' : '';
+        td.title = s.company + '\n' + s.address + ', ' + s.postCode + '\n' + (noOrder ? 'No order today' : s.orderCount + ' orders');
+
+        const row2 = document.createElement('div');
+        row2.style.cssText = 'display:flex;justify-content:space-between;align-items:center;gap:3px';
+
+        const span = document.createElement('span');
+        span.style.fontWeight = noOrder ? '400' : '600';
+        span.textContent = (noOrder ? 'X ' : '') + sn + cnt;
+        row2.appendChild(span);
+
+        const editBtn = document.createElement('span');
+        editBtn.textContent = '✎';
+        editBtn.title = 'Add note';
+        editBtn.style.cssText = 'cursor:pointer;color:#9ca3af;font-size:11px;flex-shrink:0';
+        const bid = s.branchId, snCopy = sn;
+        editBtn.onclick = (e) => { e.stopPropagation(); planEditNote(bid, snCopy); };
+        row2.appendChild(editBtn);
+        td.appendChild(row2);
+
+        if (note) {
+          const noteDiv = document.createElement('div');
+          noteDiv.style.cssText = 'font-size:10px;color:#7c3aed;margin-top:2px;font-style:italic';
+          noteDiv.textContent = note;
+          td.appendChild(noteDiv);
+        }
+      } else {
+        td.style.background = '#fafafa';
+      }
+      row.insertCell(-1).replaceWith(td);
+    });
+    // spacer cell
+    const spacer = row.insertCell(-1);
+    spacer.style.cssText = 'border:1px solid #e5e7eb;background:#f9fafb;width:50px';
+  }
+
+  // FOOTER ROW (dispatchers)
+  const tfoot = document.createElement('tfoot');
+  const fRow = tfoot.insertRow();
+  allDrivers.forEach((driver, i) => {
+    const td = document.createElement('td');
+    td.style.cssText = 'background:#1a1a2e;color:#fff;border:2px solid #111;padding:6px 10px;font-weight:700;font-size:12px;text-align:center';
+    td.textContent = dispatchers[_planDrivers.indexOf(driver)] || '—';
+    fRow.appendChild(td);
+  });
+  const footSpacer = document.createElement('td');
+  footSpacer.style.cssText = 'background:#1a1a2e;border:2px solid #111;width:50px';
+  fRow.appendChild(footSpacer);
+  table.appendChild(tfoot);
+
+  wrapper.appendChild(table);
+
+  const planBody = document.getElementById('plan-body');
+  const existingMsg = planBody ? planBody.querySelector('#plan-msg') : null;
+  const msgHtml = existingMsg ? existingMsg.outerHTML : '<div id="plan-msg"></div>';
+
+  if (planBody) {
+    planBody.innerHTML = msgHtml +
+      '<div id="plan-table-wrap"></div>' +
+      '<div style="margin-top:10px;font-size:12px;color:#6b7280">Drag stops between columns to reassign &middot; &#9998; add notes &middot; Red = no order today &middot; Top row = driver &middot; Bottom row = dispatcher</div>';
+    document.getElementById('plan-table-wrap').appendChild(wrapper);
+  }
 }
 
 function _planDrop(el, e) {
