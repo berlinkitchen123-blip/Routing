@@ -854,6 +854,77 @@ async function planLoadOrders() {
 async function planAutoAssign(silent=false) {
   const btn = !silent && event?.target;
   if(btn){btn.disabled=true;btn.textContent='Assigning…';}
+
+  // Cloud mode: re-apply weekly template if loaded, else use built-in postcode zones
+  if (!API_BASE) {
+    if (_weeklyTemplate && _weeklyTemplate.routes) {
+      // Re-apply template assignments to current stops
+      const orderMap = {};
+      _planStops.forEach(s => {
+        const k = s.company.toLowerCase().replace(/[^a-z0-9]/g,'');
+        orderMap[k] = s.branchId;
+      });
+      Object.entries(_weeklyTemplate.routes).forEach(([driver, companies]) => {
+        companies.forEach(tmplName => {
+          const tk = tmplName.toLowerCase().replace(/[^a-z0-9]/g,'');
+          let bid = orderMap[tk];
+          if (!bid) { // fuzzy match
+            for (const [k, id] of Object.entries(orderMap)) {
+              if (k.includes(tk.substring(0,6)) || tk.includes(k.substring(0,6))) { bid = id; break; }
+            }
+          }
+          if (bid) _planAssign[bid] = driver;
+        });
+      });
+      _planDrivers = _weeklyTemplate.drivers || [...new Set(Object.values(_planAssign))].filter(d=>d!=='Unassigned').sort();
+    } else {
+      // Built-in Berlin postcode zones
+      const BERLIN_ZONES = {
+        '10115':'Samir','10117':'Samir','10119':'Samir','10178':'Samir','10179':'Samir',
+        '10243':'Ali1','10245':'Ali1','10247':'Ali1','10249':'Ali1',
+        '10317':'Josef','10365':'Josef','10369':'Josef',
+        '10405':'Samir','10407':'Samir','10409':'Samir','10437':'Samir','10439':'Samir',
+        '10551':'Piyush','10553':'Piyush','10555':'Piyush','10557':'Piyush','10559':'Piyush',
+        '10623':'Piyush','10625':'Piyush','10627':'Piyush','10629':'Piyush',
+        '10711':'Tasnim','10713':'Tasnim','10715':'Tasnim','10717':'Tasnim','10719':'Tasnim',
+        '10783':'Tasnim','10785':'Tasnim','10787':'Tasnim','10789':'Tasnim',
+        '10827':'Samir','10829':'Samir','10961':'Ali2','10963':'Ali2','10965':'Ali2',
+        '10967':'Ali2','10969':'Ali2','10997':'Ali2','10999':'Ali2',
+        '12043':'Ali1','12045':'Ali1','12047':'Ali1','12049':'Ali1','12051':'Ali1','12053':'Ali1','12055':'Ali1','12057':'Ali1','12059':'Ali1',
+        '12099':'Josef','12101':'Josef','12103':'Josef','12105':'Josef','12107':'Josef',
+        '12247':'Josef','12249':'Josef',
+        '12487':'Josef','12489':'Josef','12526':'Josef',
+        '12687':'Packator','13086':'Samir',
+        '13355':'Samir','13357':'Samir','13359':'Samir',
+        '13407':'Packator','13409':'Packator','13509':'Packator',
+        '14195':'Josef','14473':'Packator','14974':'Packator','15831':'Packator'
+      };
+      const MUNICH_ZONES = {
+        '80331':'Samir','80333':'Samir','80335':'Samir','80336':'Samir','80337':'Samir','80339':'Samir',
+        '80469':'Ali','80538':'Ali','80539':'Ali','80636':'Ali2','80637':'Ali2','80638':'Ali2','80639':'Ali2',
+        '80686':'Ali2','80687':'Ali2','80689':'Ali2','80797':'Ali3','80803':'Ali3','80804':'Ali3','80805':'Ali3',
+        '80807':'Ali3','80809':'Ali3','81241':'Josef','81371':'Josef','81373':'Josef','81375':'Josef',
+        '81377':'Josef','81379':'Josef','81475':'Josef','81477':'Josef','81541':'Martin','81543':'Martin',
+        '81547':'Martin','81549':'Martin','81667':'Martin','81669':'Martin','81671':'Martin','81673':'Martin',
+        '81675':'Martin','81677':'Martin','81679':'Martin','81925':'Martin','82008':'Piyush','82049':'Piyush',
+        '82065':'Piyush','82131':'Piyush','82152':'Piyush','85521':'Packator','85551':'Packator',
+        '85579':'Packator','85609':'Packator','85622':'Packator','85630':'Packator','85648':'Packator',
+        '85649':'Packator','85716':'Packator','85748':'Packator','86150':'Augsburg'
+      };
+      const zones = _planKitchen === 'Munich' ? MUNICH_ZONES : BERLIN_ZONES;
+      _planStops.forEach(s => {
+        const pc = (s.postCode||'').trim();
+        if (zones[pc] && !_planAssign[s.branchId]) _planAssign[s.branchId] = zones[pc];
+      });
+    }
+    _planStops.forEach(s => { if (!_planAssign[s.branchId]) _planAssign[s.branchId] = 'Unassigned'; });
+    _planDrivers = [...new Set(Object.values(_planAssign))].filter(d=>d!=='Unassigned').sort();
+    if (_planDrivers.indexOf('Unassigned') < 0 && _planStops.some(s=>_planAssign[s.branchId]==='Unassigned')) _planDrivers.push('Unassigned');
+    if(!silent) _paintPlanGrid();
+    if(btn){btn.disabled=false;btn.textContent='🗺 Auto-Assign Zones';}
+    return;
+  }
+
   try {
     const r = await fetch(`${API_BASE}/api/planning/auto-zones?kitchen=${_planKitchen}`);
     const d = await r.json();
@@ -862,7 +933,6 @@ async function planAutoAssign(silent=false) {
       const pc = (s.postCode||'').trim();
       if (zones[pc] && !_planAssign[s.branchId]) _planAssign[s.branchId] = zones[pc];
     });
-    // Anything still unassigned → 'Unassigned' pool
     _planStops.forEach(s => { if (!_planAssign[s.branchId]) _planAssign[s.branchId] = 'Unassigned'; });
     _planDrivers = [...new Set(Object.values(_planAssign))].filter(d=>d!=='Unassigned').sort();
     if (_planDrivers.indexOf('Unassigned') < 0 && _planStops.some(s=>_planAssign[s.branchId]==='Unassigned')) _planDrivers.push('Unassigned');
@@ -1023,73 +1093,108 @@ async function saveWeeklyTemplate() {
 function _paintPlanGrid() {
   if (_planStops.length === 0) return;
 
-  // Ensure all stops have an assignment
   _planStops.forEach(s => { if (!_planAssign[s.branchId]) _planAssign[s.branchId] = 'Unassigned'; });
-  _planDrivers = [...new Set(Object.values(_planAssign))].filter(d=>d!=='Unassigned').sort();
-  const unassigned = _planStops.filter(s=>_planAssign[s.branchId]==='Unassigned');
-  if (unassigned.length > 0 && _planDrivers.indexOf('Unassigned')<0) _planDrivers.push('Unassigned');
+  // Preserve template order if available, otherwise sort
+  if (_weeklyTemplate && _weeklyTemplate.drivers) {
+    _planDrivers = [..._weeklyTemplate.drivers];
+    const extras = [...new Set(Object.values(_planAssign))].filter(d=>d!=='Unassigned'&&!_planDrivers.includes(d));
+    _planDrivers.push(...extras);
+  } else {
+    _planDrivers = [...new Set(Object.values(_planAssign))].filter(d=>d!=='Unassigned').sort();
+  }
+  const hasUnassigned = _planStops.some(s=>_planAssign[s.branchId]==='Unassigned');
+  const allDrivers = hasUnassigned ? ['Unassigned',..._planDrivers] : [..._planDrivers];
 
-  // Add Driver button
-  const addDriverHtml =
-    '<div style="min-width:160px;flex-shrink:0">' +
-    '<div style="text-align:center;padding:8px 0">' +
-    '<button class="btn btn-sm" onclick="planAddDriver()" style="font-size:12px">+ Add Driver</button></div></div>';
+  // Build per-driver stop lists
+  const colStops = {};
+  allDrivers.forEach(d => { colStops[d] = _planStops.filter(s=>_planAssign[s.branchId]===d); });
+  const maxRows = Math.max(...allDrivers.map(d=>colStops[d].length), 1);
 
-  const gridHtml = _planDrivers.map(driver => {
-    const stops = _planStops.filter(s => _planAssign[s.branchId] === driver);
-    const color = DRIVER_COLORS[driver] || '#f3f4f6';
+  const COLORS = {
+    'Samir':'#fde68a','Ali1':'#bbf7d0','Ali2':'#bfdbfe','Ali':'#bbf7d0',
+    'Jozef':'#fecaca','Josef':'#fecaca','Martin':'#ddd6fe','Tasnim':'#fed7aa',
+    'Packator':'#e5e7eb','Packator1':'#e5e7eb','Packator2':'#d1fae5',
+    'Piyush':'#fce7f3','Mykhaielo':'#cffafe','Kartik':'#fef3c7',
+    'Yousef':'#ede9fe','Ali3':'#d1fae5','Unassigned':'#fef9c3'
+  };
+
+  const col = (driver) => COLORS[driver] || (DRIVER_COLORS&&DRIVER_COLORS[driver]) || '#f3f4f6';
+
+  // Build TABLE — each column = 1 driver, each row = 1 stop
+  let tbl = '<table style="border-collapse:collapse;table-layout:fixed;min-width:' + (allDrivers.length * 155) + 'px">';
+
+  // Header row — driver names
+  tbl += '<thead><tr>';
+  allDrivers.forEach(driver => {
+    const stops = colStops[driver];
     const isUnassigned = driver === 'Unassigned';
-    return '<div class="plan-col" data-driver="'+driver+'" ondragover="event.preventDefault()" ondrop="planDrop(event,\''+driver+'\')" style="min-width:160px;max-width:200px;flex-shrink:0">' +
-    '<div style="background:'+color+';border:2px solid #000;padding:6px 10px;font-weight:700;font-size:13px;text-align:center;border-bottom:none;position:relative">' +
-      (isUnassigned?'⚠️ Unassigned':driver) +
-      '<span style="position:absolute;right:4px;top:4px;font-size:10px;color:#6b7280">'+stops.length+' stops</span>' +
-    '</div>' +
-    '<div style="border:1px solid #d1d5db;border-top:none;min-height:200px;background:#fff">' +
-    stops.map(s => {
+    tbl += '<th ondragover="event.preventDefault()" ondrop="planDrop(event,'' + driver + '')" ' +
+      'style="background:' + col(driver) + ';border:2px solid #111;padding:7px 10px;font-size:13px;' +
+      'font-weight:700;text-align:center;min-width:150px;width:155px;position:relative;cursor:default">' +
+      (isUnassigned ? '⚠️ New Stops' : driver) +
+      '<br><span style="font-size:10px;font-weight:400;color:#374151">' + stops.length + ' stops</span>' +
+      '</th>';
+  });
+  tbl += '<th style="background:#f9fafb;border:2px solid #111;width:50px;text-align:center;vertical-align:middle">' +
+    '<button onclick="planAddDriver()" style="background:#1a1a2e;color:#fff;border:none;border-radius:4px;padding:4px 6px;cursor:pointer;font-size:11px">+Driver</button></th>';
+  tbl += '</tr></thead>';
+
+  // Body rows — stops
+  tbl += '<tbody>';
+  for (let i = 0; i < maxRows; i++) {
+    tbl += '<tr>';
+    allDrivers.forEach(driver => {
+      const s = colStops[driver][i];
+      if (!s) {
+        tbl += '<td ondragover="event.preventDefault()" ondrop="planDrop(event,'' + driver + '')" ' +
+          'style="border:1px solid #d1d5db;padding:4px;background:#fafafa;min-height:28px"></td>';
+        return;
+      }
       const sn = shortName(s.company);
       const note = _planNotes[s.branchId] || '';
-      const isRed = note.toLowerCase().includes('red') || note.toLowerCase().includes('rot');
-      return '<div class="plan-stop" draggable="true" data-id="'+s.branchId+'" ' +
-        'ondragstart="planDragStart(event,\''+s.branchId+'\')" ' +
-        'style="padding:4px 8px;font-size:12px;border-bottom:1px solid #e5e7eb;cursor:grab;' +
-        (isRed?'color:#dc2626;font-weight:600;':'') + '"' +
-        'title="'+s.company+'\n'+s.address+', '+s.postCode+'\n'+s.orderCount+' orders · '+s.deliveryInfo+'">' +
-        '<div style="display:flex;align-items:center;gap:4px;justify-content:space-between">' +
-          '<span>'+sn+(s.orderCount>1?' ('+s.orderCount+')':'')+'</span>' +
-          '<span onclick="planEditNote(\''+s.branchId+'\',\''+sn.replace(/'/g,"\\'")+'\')" style="cursor:pointer;color:#9ca3af;font-size:10px" title="Add note">✎</span>' +
+      const noOrder = s.hasOrder === false;
+      const isPickup = (s.templateName||s.company).toLowerCase().startsWith('pickup');
+      let bg = '#fff', color = '#111', decoration = '';
+      if (noOrder)    { bg='#fee2e2'; color='#b91c1c'; decoration='text-decoration:line-through;'; }
+      else if (isPickup) { bg='#f0fdf4'; color='#166534'; }
+      else if (note)  { bg='#faf5ff'; }
+      tbl += '<td class="plan-stop" draggable="true" data-id="' + s.branchId + '" ' +
+        'ondragstart="planDragStart(event,'' + s.branchId + '')" ' +
+        'ondragover="event.preventDefault()" ondrop="planDrop(event,'' + driver + '')" ' +
+        'style="border:1px solid #d1d5db;padding:5px 7px;font-size:12px;cursor:grab;' +
+        'background:' + bg + ';color:' + color + ';' + decoration + '" ' +
+        'title="' + s.company + '&#10;' + s.address + ', ' + s.postCode + '&#10;' + (noOrder?'❌ No order today':s.orderCount+' orders') + '">' +
+        '<div style="display:flex;justify-content:space-between;align-items:center;gap:3px">' +
+          '<span style="font-weight:' + (noOrder?'400':'600') + '">' + (noOrder?'❌ ':'') + sn + (s.orderCount>1?' ('+s.orderCount+')':'') + '</span>' +
+          '<span onclick="planEditNote('' + s.branchId + '','' + sn.replace(/'/g,"\'") + '')" style="cursor:pointer;color:#9ca3af;font-size:10px;flex-shrink:0">✎</span>' +
         '</div>' +
-        (note?'<div style="font-size:10px;color:#7c3aed;font-style:italic">'+note+'</div>':'') +
-      '</div>';
-    }).join('') +
-    // Dispatcher row at bottom
-    '<div style="border:2px solid #000;border-top:2px solid #000;background:#1a1a2e;color:#fff;padding:5px 8px;font-size:11px;font-weight:700;text-align:center">' +
-    ((_weeklyTemplate&&_weeklyTemplate.dispatchers&&_weeklyTemplate.dispatchers[_planDrivers.indexOf(driver)])||'—') +
-    '</div>' +
-    '</div>';
-  }).join('');
+        (note ? '<div style="font-size:10px;color:#7c3aed;margin-top:2px;font-style:italic">' + note + '</div>' : '') +
+        '</td>';
+    });
+    tbl += '<td style="border:1px solid #e5e7eb;background:#f9fafb"></td></tr>';
+  }
+  tbl += '</tbody>';
 
-  // Red plates section — companies with specific equipment needs
-  const redPlateStops = _planStops.filter(s => {
-    const sn = shortName(s.company).toLowerCase();
-    return ['freshworks','shiftmove','adecco','bonial','omicron','isi','digital','metacore','gentlemates','abacus','lovehoney','bitpanda','trading'].some(k=>sn.includes(k));
+  // Footer row — dispatcher names
+  const dispatchers = (_weeklyTemplate && _weeklyTemplate.dispatchers) || [];
+  tbl += '<tfoot><tr>';
+  allDrivers.forEach((driver, i) => {
+    const dispName = dispatchers[_planDrivers.indexOf(driver)] || '—';
+    tbl += '<td style="background:#1a1a2e;color:#fff;border:2px solid #111;padding:6px 10px;' +
+      'font-weight:700;font-size:12px;text-align:center">' + dispName + '</td>';
   });
+  tbl += '<td style="background:#1a1a2e;border:2px solid #111"></td></tr></tfoot>';
+  tbl += '</table>';
+
+  // Unassigned section header
+  const unassignedCount = hasUnassigned ? colStops['Unassigned'].length : 0;
 
   document.getElementById('plan-body').innerHTML =
-  '<div id="plan-msg" style="margin-bottom:8px"></div>' +
-  '<div style="overflow-x:auto;padding-bottom:12px">' +
-    '<div style="display:flex;gap:0;align-items:flex-start">'+gridHtml+addDriverHtml+'</div>' +
-  '</div>' +
-
-  // Red plates reminder (matches the Excel bottom section)
-  (redPlateStops.length>0?
-  '<div style="margin-top:20px;border:2px solid #dc2626;border-radius:8px;overflow:hidden">' +
-    '<div style="background:#fef9c3;padding:8px 14px;font-weight:700;font-size:14px;color:#92400e;text-align:center">🚨 DON\'T FORGET THE RED PLATES!</div>' +
-    '<div style="background:#fee2e2;padding:8px 14px;font-size:12px;color:#7f1d1d;font-weight:600;text-align:center">Red hot plates for mandatory use in these companies</div>' +
-    '<div style="background:#fff5f5;padding:10px 14px;display:flex;flex-wrap:wrap;gap:8px">' +
-    redPlateStops.map(s=>'<span style="background:#fff;border:1px solid #fca5a5;border-radius:4px;padding:2px 10px;font-size:12px;color:#dc2626;font-weight:600">'+shortName(s.company)+'</span>').join('') +
-    '</div></div>':'') +
-
-  '<div style="margin-top:14px;font-size:12px;color:#9ca3af">💡 Drag stops between columns to reassign. Click ✎ to add notes. Right-click a driver name to rename.</div>';
+    '<div id="plan-msg" style="margin-bottom:8px"></div>' +
+    '<div style="overflow-x:auto;padding-bottom:16px;background:#f8fafc;border-radius:8px;padding:12px">' +
+      tbl +
+    '</div>' +
+    '<div style="margin-top:10px;font-size:12px;color:#6b7280">💡 Drag stops between columns · ✎ add notes · ❌ red = no order today · top row = driver · bottom row = dispatcher</div>';
 }
 
 function planDragStart(e, branchId) {
