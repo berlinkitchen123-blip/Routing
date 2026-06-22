@@ -4746,68 +4746,178 @@ async function buildPdfReports(date) {
 }
 
 function printPartnerPdfFull(partnerName, date) {
-  const partners = window._pdfPartnersData || [];
-  const p = partners.find(x => x.name === partnerName);
-  if (!p) return;
-  const allRecs = window._pdfAllRecs || [];
+  const allRecs = window._pdfAllRecs || window._waAllRecs || [];
   const month = date.substring(0,7);
   const monthRecs = allRecs.filter(r => r.date && r.date.substring(0,7) === month);
+  if (monthRecs.length === 0) { alert('No data found for ' + month + '. Save daily records first.'); return; }
 
-  const win = window.open('', '_blank', 'width=700,height=900');
-  win.document.write(`<!DOCTYPE html><html><head><title>${partnerName} — ${date}</title>
+  const R = window._kpiRates || {};
+  const DAY_NAMES = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
+  const fmtD = d => { const o=new Date(d+'T12:00:00'); return DAY_NAMES[o.getDay()]+' '+String(o.getDate()).padStart(2,'0')+' '+d.substring(5,7); };
+  const fmtE = n => n > 0 ? '€ '+n.toFixed(2) : '-';
+  const fmtC = n => '€'+n.toFixed(0);
+  function pRate(s){ if(s<=2)return 0; if(s<=4)return R.packatorBase||101; return (R.packatorBase||101)+(s-4)*(R.packatorPerStop||14); }
+  function aliRate(s){ if(s<=0)return R.aliT4||110; if(s<=4)return R.aliT4||110; if(s===5)return R.aliT5||115; if(s===6)return R.aliT6||125; return (R.aliT6||125)+(s-6)*(R.aliExtra||15); }
+  function samirRate(s){ if(s<=0)return 0; const t4=R.samirT4||75,t5=R.samirT5||85,t6=R.samirT6||95,t7=R.samirT7||110,t8=R.samirT8||120,ex=R.samirExtra||15; return s<=4?t4:s===5?t5:s===6?t6:s===7?t7:s===8?t8:t8+(s-8)*ex; }
+
+  // Build rows per partner
+  function getRows(rec) {
+    const rows = [], extra = rec.extraAmt||0, extraPerson = (rec.extraCostPerson||'').toLowerCase();
+    let dayTotal = 0;
+    let extraMoney = 0;
+
+    if (partnerName === 'Ali') {
+      // Jozef
+      const jStops = rec.jozefStops||0, jCost = rec.jozefCost||(jStops>0?aliRate(jStops):0);
+      if (jCost > 0) rows.push('Jozef: '+jStops+' stops ('+fmtC(jCost)+')');
+      const jDisp = rec.jozefDispatch||0; if (jDisp>0) rows.push('Jozef Dispatch: '+fmtC(jDisp));
+      // Ali 1
+      const a1 = rec.aliStops||0, a1c = rec.aliCost||(a1>0?aliRate(a1):0);
+      if (a1c > 0) rows.push('Ali 1: '+a1+' stops ('+fmtC(a1c)+')');
+      const a1d = rec.aliDispatch||0; if (a1d>0) rows.push('Ali 1 Dispatch: '+fmtC(a1d));
+      // Ali 2
+      const a2 = rec.ali2stops||0, a2c = rec.ali2Cost||(a2>0?aliRate(a2):0);
+      if (a2c > 0) rows.push('Ali 2: '+a2+' stops ('+fmtC(a2c)+')');
+      const a2d = rec.ali2Dispatch||0; if (a2d>0) rows.push('Ali 2 Dispatch: '+fmtC(a2d));
+      // Ali 3
+      const a3 = rec.ali3stops||0, a3c = rec.ali3Cost||(a3>0?aliRate(a3):0);
+      if (a3c > 0) rows.push('Ali 3: '+a3+' stops ('+fmtC(a3c)+')');
+      const a3d = rec.ali3Dispatch||0; if (a3d>0) rows.push('Ali 3 Dispatch: '+fmtC(a3d));
+      // Ali 4
+      const a4 = rec.ali4stops||0, a4c = rec.ali4Cost||(a4>0?aliRate(a4):0);
+      if (a4c > 0) rows.push('Ali 4: '+a4+' stops ('+fmtC(a4c)+')');
+      // Pickups
+      const pickups = rec.aliPickupCost||(rec.samirPickup||0)>0?0:0;
+      const pStops = rec.aliPickupStops||0, pCost = pStops*(R.samirPickup||10);
+      if (pCost > 0) rows.push('Pickups: '+pStops+' ('+fmtC(pCost)+')');
+      // Packator dispatch attributed to Ali
+      const p1d = rec.packator1Dispatch||0; if (p1d>0) rows.push('P1 Dispatch: '+fmtC(p1d));
+      const p2d = rec.packator2Dispatch||0; if (p2d>0) rows.push('P2 Dispatch: '+fmtC(p2d));
+      // Extra
+      if (extra > 0 && (extraPerson.includes('ali') || extraPerson.includes('jozef') || extraPerson==='')) extraMoney = extra;
+      dayTotal = jCost+jDisp+a1c+a1d+a2c+a2d+a3c+a3d+a4c+pCost+p1d+p2d+extraMoney;
+
+    } else if (partnerName === 'Samir') {
+      const sStops = rec.samirStops||0, sCost = rec.samirCost||samirRate(sStops);
+      if (sCost > 0) rows.push('Samir: '+sStops+' stops ('+fmtC(sCost)+')');
+      const sDisp = rec.samirDispatch||0; if (sDisp>0) rows.push('Samir Dispatch: '+fmtC(sDisp));
+      const pkl = rec.samirPickup||0, pklC = pkl*(R.samirPickup||10);
+      if (pklC > 0) rows.push('Pickups: '+pkl+' ('+fmtC(pklC)+')');
+      if (extra > 0 && extraPerson.includes('samir')) extraMoney = extra;
+      dayTotal = sCost+sDisp+pklC+extraMoney;
+
+    } else if (partnerName === 'Packator') {
+      const drivers = [
+        {n:'Packator 1',s:rec.p1stops||0},{n:'Packator 2',s:rec.p2stops||0},
+        {n:'Packator 3',s:rec.p3stops||0},{n:'Packator 4',s:rec.p4stops||0},
+        {n:'Stadtbote 1',s:rec.p5stops||0},{n:'Stadtbote 2',s:rec.p6stops||0},
+      ];
+      drivers.forEach(d => { const c=pRate(d.s); if(c>0){rows.push(d.n+': '+d.s+' stops ('+fmtC(c)+')'); dayTotal+=c;} });
+      const disp = rec.packatorDispatch||rec.packatorDispatchCost||0;
+      if (disp>0){rows.push('Dispatch: '+fmtC(disp)); dayTotal+=disp;}
+      if (extra > 0 && (extraPerson.includes('packator')||extraPerson.includes('stadtbote'))) extraMoney = extra;
+      dayTotal += extraMoney;
+
+    } else if (partnerName === 'Mykhailo') {
+      const cost = rec.mykhailoRate||rec.mykhailoCost||0, stops = rec.mykhailoStops||0;
+      if (cost > 0){rows.push('Mykhailo: '+stops+' stops ('+fmtC(cost)+')'); dayTotal=cost;}
+      if (extra > 0 && extraPerson.includes('mykh')) extraMoney = extra;
+      dayTotal += extraMoney;
+    }
+
+    return { rows, dayTotal, extraMoney };
+  }
+
+  let grandTotal = 0;
+  const tableRows = monthRecs.filter(r => {
+    const {rows,dayTotal} = getRows(r);
+    return rows.length > 0 || dayTotal > 0;
+  }).map(rec => {
+    const {rows, dayTotal, extraMoney} = getRows(rec);
+    grandTotal += dayTotal;
+    return { date: rec.date, rows, dayTotal, extraMoney };
+  });
+
+  const monthName = new Date(date+'T12:00:00').toLocaleString('en-GB',{month:'long',year:'numeric'});
+  const PARTNER_COLORS = { Ali:'#2563eb', Samir:'#d97706', Packator:'#374151', Mykhailo:'#0891b2' };
+  const color = PARTNER_COLORS[partnerName] || '#1a1a2e';
+
+  const tableRowsHtml = tableRows.map(row =>
+    '<tr>' +
+    '<td style="padding:8px 10px;vertical-align:top;white-space:nowrap;font-weight:600;border-bottom:1px solid #e5e7eb">' + fmtD(row.date) + '</td>' +
+    '<td style="padding:8px 10px;vertical-align:top;border-bottom:1px solid #e5e7eb;line-height:1.7">' + row.rows.join('<br>') + '</td>' +
+    '<td style="padding:8px 10px;vertical-align:top;text-align:center;border-bottom:1px solid #e5e7eb;font-weight:600;color:'+( row.extraMoney>0?'#16a34a':'#9ca3af')+'">'+fmtE(row.extraMoney)+'</td>' +
+    '<td style="padding:8px 10px;vertical-align:top;text-align:right;border-bottom:1px solid #e5e7eb;font-weight:700;font-size:15px;color:'+color+'">€ '+row.dayTotal.toFixed(2)+'</td>' +
+    '</tr>'
+  ).join('');
+
+  const win = window.open('', '_blank', 'width=800,height:1000');
+  win.document.write(`<!DOCTYPE html><html><head><title>${partnerName} — ${monthName}</title>
 <style>
-*{box-sizing:border-box} body{font-family:Arial,sans-serif;padding:32px;color:#111;max-width:600px;margin:0 auto}
-.logo{font-size:24px;font-weight:900;color:#e85d04} .subtitle{font-size:12px;color:#6b7280;margin-bottom:24px}
-h1{font-size:20px;border-bottom:3px solid ${p.color};padding-bottom:8px;margin-bottom:20px}
-.period{background:${p.color};color:#fff;border-radius:8px;padding:10px 16px;margin-bottom:8px;display:flex;justify-content:space-between;align-items:center}
-.period .label{font-size:13px;font-weight:600} .period .amount{font-size:20px;font-weight:900}
-.detail-row{display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid #f3f4f6;font-size:13px}
-.monthly-table{width:100%;border-collapse:collapse;margin-top:20px;font-size:12px}
-.monthly-table th{background:#f3f4f6;padding:6px 10px;text-align:left;border-bottom:2px solid #e5e7eb}
-.monthly-table td{padding:5px 10px;border-bottom:1px solid #f3f4f6}
-.footer{margin-top:32px;font-size:10px;color:#9ca3af;border-top:1px solid #e5e7eb;padding-top:8px;text-align:center}
-@media print{.noprint{display:none}}
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:Arial,sans-serif;padding:32px;color:#111;max-width:750px;margin:0 auto;font-size:13px}
+.logo{font-size:28px;font-weight:900;color:#e85d04;letter-spacing:-1px}
+.header-row{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:20px;border-bottom:3px solid ${color};padding-bottom:14px}
+.partner-title{font-size:22px;font-weight:900;color:${color}}
+.month{font-size:14px;color:#6b7280;margin-top:4px}
+.grand-total-box{background:${color};color:#fff;border-radius:10px;padding:12px 20px;text-align:right}
+.grand-total-label{font-size:11px;opacity:0.85;margin-bottom:2px}
+.grand-total-amount{font-size:26px;font-weight:900}
+table{width:100%;border-collapse:collapse;margin-top:16px}
+thead tr{background:${color};color:#fff}
+th{padding:10px 10px;text-align:left;font-size:12px;font-weight:700}
+th:nth-child(3),th:nth-child(4){text-align:right}
+tbody tr:nth-child(even){background:#f9fafb}
+tfoot tr{background:#f0f9ff}
+.footer-total td{font-weight:700;font-size:15px;border-top:3px solid ${color};padding:10px}
+.footer{margin-top:28px;font-size:10px;color:#9ca3af;text-align:center;border-top:1px solid #e5e7eb;padding-top:8px}
+@media print{.noprint{display:none} body{padding:16px}}
 </style></head><body>
-<div class="logo">BellaBona</div>
-<div class="subtitle">Logistic Management System — Berlin</div>
-<h1>${p.icon} ${partnerName} — Payment Report</h1>
-
-<div class="period"><span class="label">📅 Today — ${date}</span><span class="amount">€${(p.d||0).toFixed(2)}</span></div>
-<div class="period" style="background:#374151"><span class="label">📆 This Week (${p.wDays} days)</span><span class="amount">€${(p.w||0).toFixed(2)}</span></div>
-<div class="period" style="background:#1a1a2e"><span class="label">🗓️ This Month — ${month} (${p.mDays} days)</span><span class="amount">€${(p.m||0).toFixed(2)}</span></div>
-
-<div style="margin-top:20px;padding:12px;background:#f9fafb;border-radius:6px;font-size:12px;color:#374151">
-  <strong>Today's Detail:</strong> ${p.detail}
+<div class="header-row">
+  <div>
+    <div class="logo">BellaBona</div>
+    <div class="partner-title">${partnerName} - Pay Summary</div>
+    <div class="month">Month: ${monthName}</div>
+  </div>
+  <div class="grand-total-box">
+    <div class="grand-total-label">TOTAL TO RECEIVE:</div>
+    <div class="grand-total-amount">€ ${grandTotal.toFixed(2)}</div>
+  </div>
 </div>
 
-<h3 style="margin-top:24px;font-size:14px">Daily Breakdown — ${month}</h3>
-<table class="monthly-table">
-<thead><tr><th>Date</th><th>Payable</th><th>Stops</th></tr></thead>
-<tbody>
-${monthRecs.map(r => {
-  let cost = 0, stops = 0;
-  if (partnerName==='Ali & Jozef') { cost=(r.aliCost||0)+(r.jozefCost||0); stops=(r.aliStops||0)+(r.ali2stops||0)+(r.jozefStops||0); }
-  else if (partnerName==='Samir') { cost=r.samirCost||0; stops=r.samirStops||0; }
-  else if (partnerName==='Packator Fleet') { cost=r.packatorCost||0; stops=(r.p1stops||0)+(r.p2stops||0)+(r.p3stops||0)+(r.p4stops||0)+(r.p5stops||0)+(r.p6stops||0); }
-  else if (partnerName==='Mykhailo') { cost=r.mykhailoRate||r.mykhailoCost||0; stops=r.mykhailoStops||0; }
-  return `<tr><td>${r.date}</td><td style="font-weight:600">€${cost.toFixed(2)}</td><td>${Math.round(stops)}</td></tr>`;
-}).join('')}
-</tbody>
+<table>
+  <thead>
+    <tr>
+      <th style="width:90px">Date</th>
+      <th>Daily Breakdown</th>
+      <th style="width:100px;text-align:center">Extra Money</th>
+      <th style="width:110px;text-align:right">Total for Day</th>
+    </tr>
+  </thead>
+  <tbody>${tableRowsHtml}</tbody>
+  <tfoot>
+    <tr class="footer-total">
+      <td colspan="2" style="padding:10px;font-size:13px;border-top:3px solid ${color}">💵 GRAND TOTAL TO PAY</td>
+      <td style="border-top:3px solid ${color}"></td>
+      <td style="padding:10px;text-align:right;font-size:18px;font-weight:900;color:${color};border-top:3px solid ${color}">€ ${grandTotal.toFixed(2)}</td>
+    </tr>
+  </tfoot>
 </table>
 
-<div style="text-align:right;margin-top:16px" class="noprint">
-  <button onclick="window.print()" style="background:${p.color};color:#fff;border:none;border-radius:6px;padding:10px 24px;cursor:pointer;font-size:14px;font-weight:700">🖨️ Save as PDF</button>
+<div style="margin-top:20px;text-align:right" class="noprint">
+  <button onclick="window.print()" style="background:${color};color:#fff;border:none;border-radius:7px;padding:10px 28px;cursor:pointer;font-size:14px;font-weight:700">🖨️ Save as PDF</button>
 </div>
-<div class="footer">BellaBona Logistic Management · Generated ${new Date().toLocaleString('de-DE')} · Confidential</div>
+<div class="footer">BellaBona Logistic Management System · Generated ${new Date().toLocaleString('de-DE')} · Confidential</div>
 </body></html>`);
   win.document.close();
 }
 
 function printAllFleetPdfFull(date) {
-  ['Ali & Jozef','Samir','Packator Fleet','Mykhailo'].forEach((p,i) => {
-    setTimeout(() => printPartnerPdfFull(p, date), i * 600);
+  ['Ali','Samir','Packator','Mykhailo'].forEach((p,i) => {
+    setTimeout(() => printPartnerPdfFull(p, date), i * 700);
   });
 }
+
 
 
 function printPartnerPdf(partnerName, date) {
