@@ -4412,134 +4412,219 @@ async function saveKpiRates() {
 // WHATSAPP REPORT
 // ════════════════════════════════════════════════════════════
 async function openWhatsAppReport() {
-  // Load all records from Firestore for aggregation
   const date = document.getElementById('kpi-date')?.value || new Date().toLocaleDateString('en-CA');
   const { getDocs } = await import('https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js');
   let allRecs = [];
   try {
     const snap = await getDocs(window._fbCollection(window._fbDb,'logisticKPI'));
     snap.forEach(d => { const r=d.data(); if(r.city==='Berlin') allRecs.push(r); });
-    allRecs.sort((a,b)=>a.date.localeCompare(b.date));
+    allRecs.sort((a,b) => a.date.localeCompare(b.date));
   } catch(e) {}
+  window._waAllRecs = allRecs;
 
   const mo = document.createElement('div');
-  mo.className='modal-overlay'; mo.id='wa-modal';
+  mo.className = 'modal-overlay'; mo.id = 'wa-modal';
   mo.innerHTML =
     '<div class="modal" style="width:min(720px,95vw);max-height:90vh;overflow-y:auto">' +
     '<button class="modal-close" onclick="this.closest(\'.modal-overlay\').remove()">×</button>' +
     '<h3>💬 WhatsApp Reports</h3>' +
-    '<div style="display:flex;align-items:center;gap:10px;margin-bottom:16px;background:#f9fafb;border-radius:8px;padding:10px 14px">' +
-      '<label style="font-size:13px;font-weight:600">📅 Report Date:</label>' +
+    '<div style="display:flex;align-items:center;gap:10px;margin-bottom:16px;background:#f9fafb;border-radius:8px;padding:10px 14px;flex-wrap:wrap">' +
+      '<label style="font-size:13px;font-weight:600">📅 Date:</label>' +
       '<input type="date" id="wa-date" value="'+date+'" style="border:1px solid #d1d5db;border-radius:6px;padding:5px 10px;font-size:13px">' +
-      '<button onclick="buildWaReports(document.getElementById(\'wa-date\').value)" style="background:#25d366;color:#fff;border:none;border-radius:6px;padding:6px 14px;cursor:pointer;font-size:13px;font-weight:600">📊 Generate</button>' +
+      '<select id="wa-period" style="border:1px solid #d1d5db;border-radius:6px;padding:5px 10px;font-size:13px">' +
+        '<option value="day">Daily</option>' +
+        '<option value="week">Weekly</option>' +
+        '<option value="month">Monthly</option>' +
+      '</select>' +
+      '<button onclick="buildWaReports(document.getElementById(\'wa-date\').value, document.getElementById(\'wa-period\').value)" style="background:#25d366;color:#fff;border:none;border-radius:6px;padding:6px 14px;cursor:pointer;font-size:13px;font-weight:600">📊 Generate</button>' +
     '</div>' +
-    '<div id="wa-content">Click Generate to build reports.</div>' +
+    '<div id="wa-content" style="font-size:13px;color:#6b7280;padding:20px;text-align:center">Select a date and period, then click Generate.</div>' +
     '</div>';
   document.body.appendChild(mo);
-  window._waAllRecs = allRecs;
-  buildWaReports(date);
+  buildWaReports(date, 'day');
 }
 
-async function buildWaReports(date) {
+
+async function buildWaReports(date, period) {
   const allRecs = window._waAllRecs || [];
   const el = document.getElementById('wa-content');
   if (!el) return;
+  el.innerHTML = '<div style="padding:20px;text-align:center;color:#9ca3af">Building reports…</div>';
 
-  // Selected day record
-  const dayRec = allRecs.find(r => r.date === date) || {};
-  const c = dayRec;
+  const DAY_NAMES = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
+  const fmt = n => '€'+(n||0).toFixed(2);
+  const fmtDate = d => { const o=new Date(d+'T12:00:00'); return DAY_NAMES[o.getDay()]+' '+String(o.getDate()).padStart(2,'0')+'/'+String(o.getMonth()+1).padStart(2,'0'); };
+  const sep = '------------------------------';
 
-  // Week: 7 days ending on selected date (Mon-Sun or just last 7 days)
+  // Get records for the period
   const dateObj = new Date(date + 'T12:00:00');
-  const weekRecs = allRecs.filter(r => {
-    const d = new Date(r.date + 'T12:00:00');
-    const diff = (dateObj - d) / (1000*60*60*24);
-    return diff >= 0 && diff < 7;
-  });
+  let records = [];
+  let periodLabel = '';
 
-  // Month: same month as selected date
-  const month = date.substring(0,7);
-  const monthRecs = allRecs.filter(r => r.date && r.date.substring(0,7) === month);
-
-  const fmt = n => '€'+(n||0).toFixed(0);
-  const pct = (a,b) => b>0?(a/b*100).toFixed(1)+'%':'—';
-
-  function aggRecs(recs) {
-    return {
-      totalRev:     recs.reduce((s,r)=>s+(r.totalRevenue||0)+(r.serviceFee||0), 0),
-      logCost:      recs.reduce((s,r)=>s+(r.totalLogCost||0), 0),
-      profit:       recs.reduce((s,r)=>s+(r.netProfit||0), 0),
-      meals:        recs.reduce((s,r)=>s+(r.meals||0), 0),
-      stops:        recs.reduce((s,r)=>s+(r.totalStops||0), 0),
-      aliCost:      recs.reduce((s,r)=>s+(r.aliCost||0)+(r.jozefCost||0), 0),
-      samirCost:    recs.reduce((s,r)=>s+(r.samirCost||0), 0),
-      packCost:     recs.reduce((s,r)=>s+(r.packatorCost||0), 0),
-      mykhCost:     recs.reduce((s,r)=>s+(r.mykhailoRate||r.mykhailoCost||0), 0),
-      internalCost: recs.reduce((s,r)=>s+(r.driverCost||0)+(r.dispatcherCost||0)+(r.logMgrCost||0)+(r.fuelCost||0), 0),
-      extraCost:    recs.reduce((s,r)=>s+(r.extraAmt||0), 0),
-      days:         recs.length,
-    };
+  if (period === 'day') {
+    const r = allRecs.find(r => r.date === date);
+    records = r ? [r] : [];
+    periodLabel = 'Date: ' + date;
+  } else if (period === 'week') {
+    // Mon-Fri of the week containing the selected date
+    const day = dateObj.getDay(); // 0=Sun
+    const mon = new Date(dateObj); mon.setDate(dateObj.getDate() - (day===0?6:day-1));
+    const fri = new Date(mon); fri.setDate(mon.getDate()+4);
+    const monStr = mon.toLocaleDateString('en-CA');
+    const friStr = fri.toLocaleDateString('en-CA');
+    records = allRecs.filter(r => r.date >= monStr && r.date <= friStr);
+    periodLabel = 'Period: Weekly ('+monStr+' to '+friStr+')';
+  } else {
+    const month = date.substring(0,7);
+    records = allRecs.filter(r => r.date && r.date.substring(0,7) === month);
+    periodLabel = 'Period: Monthly — '+month+' ('+records.length+' days)';
   }
 
-  const dayA = aggRecs([dayRec]);
-  const weekA = aggRecs(weekRecs);
-  const monthA = aggRecs(monthRecs);
+  // Build per-day line items
+  function dayLines(r) {
+    if (!r) return [];
+    const lines = [];
+    const R = window._kpiRates || {};
 
-  function makeMsg(label, a, recCount) {
-    return `📊 *BellaBona Berlin — ${label}*
-━━━━━━━━━━━━━━━━━━
+    // Jozef
+    const jozefBase = r.jozefCost || 0;
+    const jozefExtra = (r.extraCostPerson||'').toLowerCase().includes('jozef') ? (r.extraAmt||0) : 0;
+    if (jozefBase > 0 || jozefExtra > 0) {
+      const total = jozefBase + jozefExtra;
+      lines.push('✅ Jozef: '+fmt(total)+(jozefExtra>0?' (includes '+fmt(jozefExtra)+' extra)':''));
+    }
+    const jozefDisp = r.jozefDispatch || 0;
+    if (jozefDisp > 0) lines.push('✅ Jozef Dispatch: '+fmt(jozefDisp));
 
-💰 *Revenue:* ${fmt(a.totalRev)}${recCount>1?' ('+recCount+' days)':''}
-🍽️ Meals: ${a.meals}
-🚗 *Logistic Cost:* ${fmt(a.logCost)}
-✅ *Net Profit:* ${fmt(a.profit)}
-📊 *Log Cost %:* ${pct(a.logCost, a.totalRev)}
+    // Ali 1
+    const aliBase = r.aliCost || 0;
+    const aliExtra = (r.extraCostPerson||'').toLowerCase() === 'ali' ? (r.extraAmt||0) : 0;
+    if (aliBase > 0 || aliExtra > 0) {
+      const total = aliBase + aliExtra;
+      lines.push('✅ Ali 1: '+fmt(total)+(aliExtra>0?' (includes '+fmt(aliExtra)+' extra)':''));
+    }
+    const aliDisp = r.aliDispatch || 0;
+    if (aliDisp > 0) lines.push('✅ Ali 1 Dispatch: '+fmt(aliDisp));
 
-👥 *Fleet Payments:*
-• Ali & Jozef: ${fmt(a.aliCost)}
-• Samir: ${fmt(a.samirCost)}
-• Packator Fleet: ${fmt(a.packCost)}
-• Mykhailo: ${fmt(a.mykhCost)}
-• Internal Staff: ${fmt(a.internalCost)}
-• Extra: ${fmt(a.extraCost)}
+    // Ali 2
+    const ali2Base = r.ali2Cost || 0;
+    const ali2Extra = (r.extraCostPerson||'').toLowerCase().includes('ali 2') ? (r.extraAmt||0) : 0;
+    if (ali2Base > 0 || ali2Extra > 0) {
+      const total = ali2Base + ali2Extra;
+      lines.push('✅ Ali 2: '+fmt(total)+(ali2Extra>0?' (includes '+fmt(ali2Extra)+' extra)':''));
+    }
+    const ali2Disp = r.ali2Dispatch || 0;
+    if (ali2Disp > 0) lines.push('✅ Ali 2 Dispatch: '+fmt(ali2Disp));
 
-📦 Total Stops: ${Math.round(a.stops)}
-📱 _BellaBona LMM_`;
+    // Ali 3
+    const ali3Base = r.ali3Cost || 0;
+    if (ali3Base > 0) lines.push('✅ Ali 3: '+fmt(ali3Base));
+    const ali3Disp = r.ali3Dispatch || 0;
+    if (ali3Disp > 0) lines.push('✅ Ali 3 Dispatch: '+fmt(ali3Disp));
+
+    // Ali 4
+    const ali4Base = r.ali4Cost || 0;
+    if (ali4Base > 0) lines.push('✅ Ali 4: '+fmt(ali4Base));
+
+    // Pickups attributed to Ali
+    const pickups = r.aliPickupCost || 0;
+    if (pickups > 0) lines.push('✅ Pickups: '+fmt(pickups));
+
+    return lines;
   }
 
-  function fleetMsg(name, label, daily, weekly, monthly) {
-    return `💶 *${name} — ${label}*
-━━━━━━━━━━━━━━━━━━
-📅 Today (${date}): *${fmt(daily)}*
-📆 This Week: *${fmt(weekly)}*
-🗓️ This Month: *${fmt(monthly)}*
-📱 _BellaBona LMM_`;
+  function samirDayLines(r) {
+    if (!r) return [];
+    const lines = [];
+    const samirBase = r.samirCost || 0;
+    const samirExtra = (r.extraCostPerson||'').toLowerCase().includes('samir') ? (r.extraAmt||0) : 0;
+    if (samirBase > 0 || samirExtra > 0) {
+      lines.push('✅ Samir: '+fmt(samirBase+samirExtra)+(samirExtra>0?' (includes '+fmt(samirExtra)+' extra)':'')+(r.samirStops?' ('+r.samirStops+' stops)':''));
+    }
+    const sDisp = r.samirDispatch || 0;
+    if (sDisp > 0) lines.push('✅ Samir Dispatch: '+fmt(sDisp));
+    const pickups = r.samirPickupCost || ((r.samirPickup||0) * ((window._kpiRates||{}).samirPickup||10));
+    if (pickups > 0) lines.push('✅ Pickups: '+fmt(pickups)+' ('+r.samirPickup+' × €'+((window._kpiRates||{}).samirPickup||10)+')');
+    return lines;
   }
 
-  const dayMsg   = makeMsg('Daily Report — '+date, dayA, 1);
-  const weekMsg  = makeMsg('Weekly Report ('+weekRecs.length+' days)', weekA, weekRecs.length);
-  const monthMsg = makeMsg('Monthly Report — '+month+' ('+monthRecs.length+' days)', monthA, monthRecs.length);
+  function packatorDayLines(r) {
+    if (!r) return [];
+    const lines = [];
+    const drivers = [
+      {name:'Packator 1',stops:r.p1stops},{name:'Packator 2',stops:r.p2stops},
+      {name:'Packator 3',stops:r.p3stops},{name:'Packator 4',stops:r.p4stops},
+      {name:'Stadtbote 1',stops:r.p5stops},{name:'Stadtbote 2',stops:r.p6stops},
+    ];
+    const R = window._kpiRates || {};
+    function pRate(s){ if(s<=2)return 0; if(s<=4)return R.packatorBase||101; return (R.packatorBase||101)+(s-4)*(R.packatorPerStop||14); }
+    drivers.forEach(d => {
+      if (d.stops > 0) lines.push('✅ '+d.name+': '+fmt(pRate(d.stops))+' ('+d.stops+' stops)');
+    });
+    const disp = r.packatorDispatch || r.packatorDispatchCost || 0;
+    if (disp > 0) lines.push('✅ Dispatch: '+fmt(disp));
+    return lines;
+  }
 
-  const fleetMsgs = [
-    { name: 'Ali & Jozef',
-      d: (c.aliCost||0)+(c.jozefCost||0),
-      w: weekA.aliCost, m: monthA.aliCost },
-    { name: 'Samir',
-      d: c.samirCost||0, w: weekA.samirCost, m: monthA.samirCost },
-    { name: 'Packator Fleet',
-      d: c.packatorCost||0, w: weekA.packCost, m: monthA.packCost },
-    { name: 'Mykhailo',
-      d: c.mykhailoRate||c.mykhailoCost||0, w: weekA.mykhCost, m: monthA.mykhCost },
+  function mykhailoDayLines(r) {
+    if (!r) return [];
+    const lines = [];
+    const cost = r.mykhailoRate || r.mykhailoCost || 0;
+    const stops = r.mykhailoStops || 0;
+    if (cost > 0) lines.push('✅ Mykhailo: '+fmt(cost)+(stops?' ('+stops+' stops)':''));
+    return lines;
+  }
+
+  function buildPartnerMsg(partnerName, linesFn, records, periodLabel) {
+    let total = 0;
+    let body = '';
+
+    records.forEach(r => {
+      const lines = linesFn(r);
+      if (lines.length === 0) return;
+      const dayTotal = lines.reduce((s, l) => {
+        const m = l.match(/€([\d.]+)/);
+        return s + (m ? parseFloat(m[1]) : 0);
+      }, 0);
+      total += dayTotal;
+      body += '\n📅 *'+fmtDate(r.date)+'*\n';
+      body += '💰 *Total Earned: '+fmt(dayTotal)+'*\n';
+      body += 'Details:\n';
+      body += lines.join('\n') + '\n';
+    });
+
+    if (!body) return null;
+
+    return '*Report for '+partnerName+'*\n' +
+      periodLabel + '\n' +
+      sep + '\n' +
+      body +
+      sep + '\n' +
+      '💵 *GRAND TOTAL TO PAY: '+fmt(total)+'*';
+  }
+
+  const partners = [
+    { name: 'Ali',      fn: dayLines },
+    { name: 'Samir',    fn: samirDayLines },
+    { name: 'Packator', fn: packatorDayLines },
+    { name: 'Mykhailo', fn: mykhailoDayLines },
   ];
 
+  const cards = partners.map(p => {
+    const msg = buildPartnerMsg(p.name, p.fn, records, periodLabel);
+    if (!msg) return '';
+    return _waCard('💶 ' + p.name + ' — ' + (period==='day'?date:period==='week'?'This Week':'This Month'), msg);
+  }).filter(Boolean);
+
+  if (cards.length === 0) {
+    el.innerHTML = '<div style="padding:20px;text-align:center;color:#dc2626">No data found for this period. Save daily records first.</div>';
+    return;
+  }
   el.innerHTML =
-    '<div style="font-size:12px;color:#6b7280;margin-bottom:12px">Showing reports for <b>'+date+'</b> · Week: '+weekRecs.length+' days · Month: '+monthRecs.length+' days</div>' +
-    _waCard('📊 Daily Report — '+date, dayMsg) +
-    _waCard('📅 Weekly Report', weekMsg) +
-    _waCard('📆 Monthly Report', monthMsg) +
-    '<div style="border-top:2px solid #e5e7eb;margin:16px 0 12px;font-size:13px;font-weight:700;color:#374151">💶 Individual Fleet Reports</div>' +
-    fleetMsgs.map(f => _waCard('💶 '+f.name, fleetMsg(f.name, date, f.d, f.w, f.m))).join('');
+    '<div style="font-size:12px;color:#6b7280;margin-bottom:12px">'+records.length+' day(s) · '+periodLabel+'</div>' +
+    cards.join('');
 }
+
 
 
 function _waCard(title, msg) {
