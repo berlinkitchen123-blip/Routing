@@ -4412,77 +4412,135 @@ async function saveKpiRates() {
 // WHATSAPP REPORT
 // ════════════════════════════════════════════════════════════
 async function openWhatsAppReport() {
-  if (!window._kpiCalc) { alert('Enter data and recalculate first'); return; }
+  // Load all records from Firestore for aggregation
   const date = document.getElementById('kpi-date')?.value || new Date().toLocaleDateString('en-CA');
-  const c = window._kpiCalc;
-  const totalRev = _v('kpi-totalRevenue') + _v('kpi-serviceFee');
-  const meals = _v('kpi-meals');
+  const { getDocs } = await import('https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js');
+  let allRecs = [];
+  try {
+    const snap = await getDocs(window._fbCollection(window._fbDb,'logisticKPI'));
+    snap.forEach(d => { const r=d.data(); if(r.city==='Berlin') allRecs.push(r); });
+    allRecs.sort((a,b)=>a.date.localeCompare(b.date));
+  } catch(e) {}
 
-  // Load history for weekly/monthly
-  let records = [];
-  if (window._fbReady && window._fbDb) {
-    try {
-      const { getDocs } = await import('https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js');
-      const snap = await getDocs(window._fbCollection(window._fbDb,'logisticKPI'));
-      snap.forEach(d => { const data=d.data(); if(data.city==='Berlin') records.push(data); });
-      records.sort((a,b)=>a.date.localeCompare(b.date));
-    } catch(e) {}
-  }
-  const thisWeek = records.filter(r => {
-    const d = new Date(r.date), today = new Date(date);
-    const diff = (today-d)/(1000*60*60*24);
+  const mo = document.createElement('div');
+  mo.className='modal-overlay'; mo.id='wa-modal';
+  mo.innerHTML =
+    '<div class="modal" style="width:min(720px,95vw);max-height:90vh;overflow-y:auto">' +
+    '<button class="modal-close" onclick="this.closest(\'.modal-overlay\').remove()">×</button>' +
+    '<h3>💬 WhatsApp Reports</h3>' +
+    '<div style="display:flex;align-items:center;gap:10px;margin-bottom:16px;background:#f9fafb;border-radius:8px;padding:10px 14px">' +
+      '<label style="font-size:13px;font-weight:600">📅 Report Date:</label>' +
+      '<input type="date" id="wa-date" value="'+date+'" style="border:1px solid #d1d5db;border-radius:6px;padding:5px 10px;font-size:13px">' +
+      '<button onclick="buildWaReports(document.getElementById(\'wa-date\').value)" style="background:#25d366;color:#fff;border:none;border-radius:6px;padding:6px 14px;cursor:pointer;font-size:13px;font-weight:600">📊 Generate</button>' +
+    '</div>' +
+    '<div id="wa-content">Click Generate to build reports.</div>' +
+    '</div>';
+  document.body.appendChild(mo);
+  window._waAllRecs = allRecs;
+  buildWaReports(date);
+}
+
+async function buildWaReports(date) {
+  const allRecs = window._waAllRecs || [];
+  const el = document.getElementById('wa-content');
+  if (!el) return;
+
+  // Selected day record
+  const dayRec = allRecs.find(r => r.date === date) || {};
+  const c = dayRec;
+
+  // Week: 7 days ending on selected date (Mon-Sun or just last 7 days)
+  const dateObj = new Date(date + 'T12:00:00');
+  const weekRecs = allRecs.filter(r => {
+    const d = new Date(r.date + 'T12:00:00');
+    const diff = (dateObj - d) / (1000*60*60*24);
     return diff >= 0 && diff < 7;
   });
-  const thisMonth = records.filter(r => r.date && r.date.substring(0,7) === date.substring(0,7));
+
+  // Month: same month as selected date
+  const month = date.substring(0,7);
+  const monthRecs = allRecs.filter(r => r.date && r.date.substring(0,7) === month);
 
   const fmt = n => '€'+(n||0).toFixed(0);
   const pct = (a,b) => b>0?(a/b*100).toFixed(1)+'%':'—';
 
-  const dayMsg =
-`📊 *BellaBona Berlin — Daily Report*
-📅 *${date}*
+  function aggRecs(recs) {
+    return {
+      totalRev:     recs.reduce((s,r)=>s+(r.totalRevenue||0)+(r.serviceFee||0), 0),
+      logCost:      recs.reduce((s,r)=>s+(r.totalLogCost||0), 0),
+      profit:       recs.reduce((s,r)=>s+(r.netProfit||0), 0),
+      meals:        recs.reduce((s,r)=>s+(r.meals||0), 0),
+      stops:        recs.reduce((s,r)=>s+(r.totalStops||0), 0),
+      aliCost:      recs.reduce((s,r)=>s+(r.aliCost||0)+(r.jozefCost||0), 0),
+      samirCost:    recs.reduce((s,r)=>s+(r.samirCost||0), 0),
+      packCost:     recs.reduce((s,r)=>s+(r.packatorCost||0), 0),
+      mykhCost:     recs.reduce((s,r)=>s+(r.mykhailoRate||r.mykhailoCost||0), 0),
+      internalCost: recs.reduce((s,r)=>s+(r.driverCost||0)+(r.dispatcherCost||0)+(r.logMgrCost||0)+(r.fuelCost||0), 0),
+      extraCost:    recs.reduce((s,r)=>s+(r.extraAmt||0), 0),
+      days:         recs.length,
+    };
+  }
 
-💰 *Revenue:* ${fmt(totalRev)}
-🍽️ Meals: ${meals} | Catering: ${fmt(_v('kpi-catering'))} | Add-ons: ${fmt(_v('kpi-addOns'))}
-🚗 *Logistic Cost:* ${fmt(c.totalLogCost)}
-✅ *Net Profit:* ${fmt(c.netProfit)}
-📊 *Log Cost %:* ${c.logPct}%
+  const dayA = aggRecs([dayRec]);
+  const weekA = aggRecs(weekRecs);
+  const monthA = aggRecs(monthRecs);
 
-👥 *Driver Summary:*
-• Samir: ${fmt(c.samirCost)} (${_v('kpi-samirStops')} stops)
-• Ali: ${fmt(c.aliCost)} | Jozef: ${fmt(c.jozefCost)}
-• Packator Fleet: ${fmt(c.packatorCost)}
-• Mykhailo: ${fmt(c.mykhailoCost)}
-• Internal: ${fmt(c.internalCost)}
+  function makeMsg(label, a, recCount) {
+    return `📊 *BellaBona Berlin — ${label}*
+━━━━━━━━━━━━━━━━━━
 
-📦 Stops: ${Math.round(c.totalStops)} | Cost/Stop: ${fmt(c.cpStop)} | Meals/Stop: ${c.mealsPerStop}
+💰 *Revenue:* ${fmt(a.totalRev)}${recCount>1?' ('+recCount+' days)':''}
+🍽️ Meals: ${a.meals}
+🚗 *Logistic Cost:* ${fmt(a.logCost)}
+✅ *Net Profit:* ${fmt(a.profit)}
+📊 *Log Cost %:* ${pct(a.logCost, a.totalRev)}
+
+👥 *Fleet Payments:*
+• Ali & Jozef: ${fmt(a.aliCost)}
+• Samir: ${fmt(a.samirCost)}
+• Packator Fleet: ${fmt(a.packCost)}
+• Mykhailo: ${fmt(a.mykhCost)}
+• Internal Staff: ${fmt(a.internalCost)}
+• Extra: ${fmt(a.extraCost)}
+
+📦 Total Stops: ${Math.round(a.stops)}
 📱 _BellaBona LMM_`;
+  }
 
-  const weekMsg = thisWeek.length > 0 ? `📊 *Weekly Summary (${thisWeek.length} days)*
-💰 Revenue: ${fmt(thisWeek.reduce((s,r)=>s+(r.totalRevenue||0)+(r.serviceFee||0),0))}
-🚗 Log Cost: ${fmt(thisWeek.reduce((s,r)=>s+(r.totalLogCost||0),0))}
-✅ Profit: ${fmt(thisWeek.reduce((s,r)=>s+(r.netProfit||0),0))}
-📊 Avg Log%: ${pct(thisWeek.reduce((s,r)=>s+(r.totalLogCost||0),0), thisWeek.reduce((s,r)=>s+(r.totalRevenue||0)+(r.serviceFee||0),0))}` : '(no weekly data yet)';
+  function fleetMsg(name, label, daily, weekly, monthly) {
+    return `💶 *${name} — ${label}*
+━━━━━━━━━━━━━━━━━━
+📅 Today (${date}): *${fmt(daily)}*
+📆 This Week: *${fmt(weekly)}*
+🗓️ This Month: *${fmt(monthly)}*
+📱 _BellaBona LMM_`;
+  }
 
-  const monthMsg = thisMonth.length > 0 ? `📅 *Monthly Summary (${thisMonth.length} days)*
-💰 Revenue: ${fmt(thisMonth.reduce((s,r)=>s+(r.totalRevenue||0)+(r.serviceFee||0),0))}
-🚗 Log Cost: ${fmt(thisMonth.reduce((s,r)=>s+(r.totalLogCost||0),0))}
-✅ Profit: ${fmt(thisMonth.reduce((s,r)=>s+(r.netProfit||0),0))}
-📊 Log%: ${pct(thisMonth.reduce((s,r)=>s+(r.totalLogCost||0),0), thisMonth.reduce((s,r)=>s+(r.totalRevenue||0)+(r.serviceFee||0),0))}` : '(no monthly data yet)';
+  const dayMsg   = makeMsg('Daily Report — '+date, dayA, 1);
+  const weekMsg  = makeMsg('Weekly Report ('+weekRecs.length+' days)', weekA, weekRecs.length);
+  const monthMsg = makeMsg('Monthly Report — '+month+' ('+monthRecs.length+' days)', monthA, monthRecs.length);
 
-  const mo = document.createElement('div');
-  mo.className = 'modal-overlay'; mo.id = 'wa-modal';
-  mo.innerHTML =
-    '<div class="modal" style="width:min(700px,95vw);max-height:90vh;overflow-y:auto">' +
-    '<button class="modal-close" onclick="this.closest(\'.modal-overlay\').remove()">×</button>' +
-    '<h3>💬 WhatsApp Reports</h3>' +
-    '<p style="font-size:13px;color:#6b7280;margin-bottom:16px">Click Copy then paste into WhatsApp.</p>' +
-    _waCard('📊 Daily Report', dayMsg) +
-    _waCard('📅 Weekly Summary', weekMsg) +
-    _waCard('📆 Monthly Summary', monthMsg) +
-    '</div>';
-  document.body.appendChild(mo);
+  const fleetMsgs = [
+    { name: 'Ali & Jozef',
+      d: (c.aliCost||0)+(c.jozefCost||0),
+      w: weekA.aliCost, m: monthA.aliCost },
+    { name: 'Samir',
+      d: c.samirCost||0, w: weekA.samirCost, m: monthA.samirCost },
+    { name: 'Packator Fleet',
+      d: c.packatorCost||0, w: weekA.packCost, m: monthA.packCost },
+    { name: 'Mykhailo',
+      d: c.mykhailoRate||c.mykhailoCost||0, w: weekA.mykhCost, m: monthA.mykhCost },
+  ];
+
+  el.innerHTML =
+    '<div style="font-size:12px;color:#6b7280;margin-bottom:12px">Showing reports for <b>'+date+'</b> · Week: '+weekRecs.length+' days · Month: '+monthRecs.length+' days</div>' +
+    _waCard('📊 Daily Report — '+date, dayMsg) +
+    _waCard('📅 Weekly Report', weekMsg) +
+    _waCard('📆 Monthly Report', monthMsg) +
+    '<div style="border-top:2px solid #e5e7eb;margin:16px 0 12px;font-size:13px;font-weight:700;color:#374151">💶 Individual Fleet Reports</div>' +
+    fleetMsgs.map(f => _waCard('💶 '+f.name, fleetMsg(f.name, date, f.d, f.w, f.m))).join('');
 }
+
 
 function _waCard(title, msg) {
   const id = 'wa-' + Math.random().toString(36).substr(2,6);
@@ -4501,73 +4559,171 @@ function _waCard(title, msg) {
 // ════════════════════════════════════════════════════════════
 async function openPdfReports() {
   const date = document.getElementById('kpi-date')?.value || new Date().toLocaleDateString('en-CA');
-  const c = window._kpiCalc || {};
-
-  // Load monthly data
-  let records = [];
-  if (window._fbReady && window._fbDb) {
-    try {
-      const { getDocs } = await import('https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js');
-      const snap = await getDocs(window._fbCollection(window._fbDb,'logisticKPI'));
-      snap.forEach(d => { const data=d.data(); if(data.city==='Berlin') records.push(data); });
-      records.sort((a,b)=>a.date.localeCompare(b.date));
-    } catch(e) {}
-  }
-  const month = date.substring(0,7);
-  const monthRecords = records.filter(r => r.date && r.date.substring(0,7) === month);
-
-  const partners = [
-    { name: 'Ali & Jozef', key: 'ali', color: '#2563eb',
-      daily: c.aliCost||0, monthly: monthRecords.reduce((s,r)=>s+(r.aliCost||0),0),
-      stops: _v('kpi-aliStops')+_v('kpi-ali2stops')+_v('kpi-ali3stops')+_v('kpi-ali4stops')+_v('kpi-jozefStops'),
-      monthlyStops: monthRecords.reduce((s,r)=>s+(_v('kpi-aliStops')||0),0),
-      breakdown: `Ali: €${(window._kpiCalc?.aliCost||0).toFixed(0)} | Jozef: €${(window._kpiCalc?.jozefCost||0).toFixed(0)}` },
-    { name: 'Samir', key: 'samir', color: '#d97706',
-      daily: c.samirCost||0, monthly: monthRecords.reduce((s,r)=>s+(r.samirCost||0),0),
-      stops: _v('kpi-samirStops'), monthlyStops: monthRecords.reduce((s,r)=>s+(r.samirStops||0),0),
-      breakdown: `Stops: ${_v('kpi-samirStops')} · Pickups: ${_v('kpi-samirPickup')}` },
-    { name: 'Packator Fleet', key: 'packator', color: '#374151',
-      daily: c.packatorCost||0, monthly: monthRecords.reduce((s,r)=>s+(r.packatorCost||0),0),
-      stops: _v('kpi-p1stops')+_v('kpi-p2stops')+_v('kpi-p3stops')+_v('kpi-p4stops')+_v('kpi-p5stops')+_v('kpi-p6stops'),
-      monthlyStops: monthRecords.reduce((s,r)=>s+(r.packatorStops||0),0),
-      breakdown: `P1-4 + Stadtbote 1-2` },
-    { name: 'Mykhailo', key: 'mykhailo', color: '#0891b2',
-      daily: c.mykhailoCost||0, monthly: monthRecords.reduce((s,r)=>s+(r.mykhailoCost||0),0),
-      stops: _v('kpi-mykhailoStops'), monthlyStops: monthRecords.reduce((s,r)=>s+(r.mykhailoStops||0),0),
-      breakdown: `Direct daily rate` },
-  ];
+  const { getDocs } = await import('https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js');
+  let allRecs = [];
+  try {
+    const snap = await getDocs(window._fbCollection(window._fbDb,'logisticKPI'));
+    snap.forEach(d => { const r=d.data(); if(r.city==='Berlin') allRecs.push(r); });
+    allRecs.sort((a,b)=>a.date.localeCompare(b.date));
+  } catch(e) {}
 
   const mo = document.createElement('div');
-  mo.className = 'modal-overlay'; mo.id = 'pdf-modal';
+  mo.className='modal-overlay'; mo.id='pdf-modal';
   mo.innerHTML =
-    '<div class="modal" style="width:min(800px,95vw);max-height:90vh;overflow-y:auto">' +
+    '<div class="modal" style="width:min(820px,95vw);max-height:90vh;overflow-y:auto">' +
     '<button class="modal-close" onclick="this.closest(\'.modal-overlay\').remove()">×</button>' +
-    '<h3>📄 Partner Payment Reports — '+date+'</h3>' +
-    '<p style="font-size:13px;color:#6b7280;margin-bottom:16px">Click "Print PDF" to generate a printable report for each partner. Use browser print → Save as PDF.</p>' +
-    '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(340px,1fr));gap:12px">' +
+    '<h3>📄 Partner Payment Reports</h3>' +
+    '<div style="display:flex;align-items:center;gap:10px;margin-bottom:16px;background:#f9fafb;border-radius:8px;padding:10px 14px">' +
+      '<label style="font-size:13px;font-weight:600">📅 Report Date:</label>' +
+      '<input type="date" id="pdf-date" value="'+date+'" style="border:1px solid #d1d5db;border-radius:6px;padding:5px 10px;font-size:13px">' +
+      '<button onclick="buildPdfReports(document.getElementById(\'pdf-date\').value)" style="background:#dc2626;color:#fff;border:none;border-radius:6px;padding:6px 14px;cursor:pointer;font-size:13px;font-weight:600">📊 Load</button>' +
+    '</div>' +
+    '<div id="pdf-content">Loading...</div>' +
+    '</div>';
+  document.body.appendChild(mo);
+  window._pdfAllRecs = allRecs;
+  buildPdfReports(date);
+}
+
+async function buildPdfReports(date) {
+  const allRecs = window._pdfAllRecs || [];
+  const el = document.getElementById('pdf-content');
+  if (!el) return;
+
+  const dayRec = allRecs.find(r => r.date === date) || {};
+  const dateObj = new Date(date + 'T12:00:00');
+  const weekRecs = allRecs.filter(r => {
+    const d = new Date(r.date+'T12:00:00');
+    const diff = (dateObj-d)/(1000*60*60*24);
+    return diff >= 0 && diff < 7;
+  });
+  const month = date.substring(0,7);
+  const monthRecs = allRecs.filter(r => r.date && r.date.substring(0,7) === month);
+
+  const sum = (recs, key) => recs.reduce((s,r)=>s+(r[key]||0), 0);
+  const fmt = n => '€'+(n||0).toFixed(2);
+
+  const partners = [
+    { name:'Ali & Jozef', color:'#2563eb', icon:'🏎️',
+      d: (dayRec.aliCost||0)+(dayRec.jozefCost||0),
+      dAli: dayRec.aliCost||0, dJozef: dayRec.jozefCost||0,
+      dStops: (dayRec.aliStops||0)+(dayRec.ali2stops||0)+(dayRec.jozefStops||0),
+      w: sum(weekRecs,'aliCost')+sum(weekRecs,'jozefCost'), wDays: weekRecs.length,
+      m: sum(monthRecs,'aliCost')+sum(monthRecs,'jozefCost'), mDays: monthRecs.length,
+      mStops: sum(monthRecs,'aliStops')+sum(monthRecs,'ali2stops')+sum(monthRecs,'jozefStops'),
+      detail: `Ali: ${fmt(dayRec.aliCost||0)} · Jozef: ${fmt(dayRec.jozefCost||0)} · Stops: ${(dayRec.aliStops||0)+(dayRec.ali2stops||0)+(dayRec.jozefStops||0)}` },
+    { name:'Samir', color:'#d97706', icon:'🧑‍✈️',
+      d: dayRec.samirCost||0, dStops: dayRec.samirStops||0,
+      w: sum(weekRecs,'samirCost'), wDays: weekRecs.length,
+      m: sum(monthRecs,'samirCost'), mDays: monthRecs.length,
+      mStops: sum(monthRecs,'samirStops'),
+      detail: `Stops: ${dayRec.samirStops||0} · Pickups: ${dayRec.samirPickup||0} × €${(window._kpiRates||{}).samirPickup||10}` },
+    { name:'Packator Fleet', color:'#374151', icon:'🚐',
+      d: dayRec.packatorCost||0, dStops: (dayRec.p1stops||0)+(dayRec.p2stops||0)+(dayRec.p3stops||0)+(dayRec.p4stops||0)+(dayRec.p5stops||0)+(dayRec.p6stops||0),
+      w: sum(weekRecs,'packatorCost'), wDays: weekRecs.length,
+      m: sum(monthRecs,'packatorCost'), mDays: monthRecs.length,
+      mStops: sum(monthRecs,'packatorStops'),
+      detail: `Service: ${fmt((dayRec.packatorCost||0)-(dayRec.packatorDispatch||0))} · Dispatch: ${fmt(dayRec.packatorDispatch||0)}` },
+    { name:'Mykhailo', color:'#0891b2', icon:'🚗',
+      d: dayRec.mykhailoRate||dayRec.mykhailoCost||0, dStops: dayRec.mykhailoStops||0,
+      w: sum(weekRecs,'mykhailoRate')+sum(weekRecs,'mykhailoCost'), wDays: weekRecs.length,
+      m: sum(monthRecs,'mykhailoRate')+sum(monthRecs,'mykhailoCost'), mDays: monthRecs.length,
+      mStops: sum(monthRecs,'mykhailoStops'),
+      detail: `Stops: ${dayRec.mykhailoStops||0} · Direct rate` },
+  ];
+
+  el.innerHTML =
+    '<div style="font-size:12px;color:#6b7280;margin-bottom:12px">Date: <b>'+date+'</b> · Week: '+weekRecs.length+' days · Month ('+month+'): '+monthRecs.length+' days</div>' +
+    '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(360px,1fr));gap:12px">' +
     partners.map(p =>
       '<div style="border:2px solid '+p.color+';border-radius:10px;overflow:hidden">' +
-        '<div style="background:'+p.color+';color:#fff;padding:12px 16px;display:flex;justify-content:space-between;align-items:center">' +
-          '<div style="font-weight:700;font-size:15px">'+p.name+'</div>' +
-          '<button onclick="printPartnerPdf(\''+p.name+'\',\''+date+'\')" style="background:#fff;color:'+p.color+';border:none;border-radius:5px;padding:4px 10px;cursor:pointer;font-size:12px;font-weight:700">🖨️ Print PDF</button>' +
+        '<div style="background:'+p.color+';color:#fff;padding:10px 14px;display:flex;justify-content:space-between;align-items:center">' +
+          '<span style="font-weight:700;font-size:14px">'+p.icon+' '+p.name+'</span>' +
+          '<div style="display:flex;gap:6px">' +
+            '<button onclick="printPartnerPdfFull(\''+p.name+'\',\''+date+'\')" style="background:#fff;color:'+p.color+';border:none;border-radius:4px;padding:3px 8px;cursor:pointer;font-size:11px;font-weight:700">🖨️ PDF</button>' +
+          '</div>' +
         '</div>' +
-        '<div style="padding:14px;background:#fff">' +
-          '<table style="width:100%;font-size:13px;border-collapse:collapse">' +
-            '<tr><td style="padding:4px 0;color:#6b7280">Today ('+date+')</td><td style="text-align:right;font-weight:700;color:'+p.color+'">€'+p.daily.toFixed(2)+'</td></tr>' +
-            '<tr><td style="padding:4px 0;color:#6b7280">Month to Date ('+month+')</td><td style="text-align:right;font-weight:700">€'+p.monthly.toFixed(2)+'</td></tr>' +
-            '<tr><td style="padding:4px 0;color:#6b7280">Stops Today</td><td style="text-align:right">'+Math.round(p.stops)+'</td></tr>' +
-            '<tr><td style="padding:4px 0;color:#6b7280;font-size:11px">'+p.breakdown+'</td><td></td></tr>' +
-          '</table>' +
-        '</div>' +
+        '<table style="width:100%;border-collapse:collapse;font-size:13px;background:#fff">' +
+          '<tr style="background:#f9fafb"><th style="padding:7px 12px;text-align:left;font-size:11px;color:#6b7280">Period</th><th style="padding:7px 12px;text-align:right;font-size:11px;color:#6b7280">Payable</th><th style="padding:7px 12px;text-align:right;font-size:11px;color:#6b7280">Stops</th></tr>' +
+          '<tr><td style="padding:8px 12px;font-weight:600">Today ('+date+')</td><td style="padding:8px 12px;text-align:right;font-weight:700;color:'+p.color+'">'+fmt(p.d)+'</td><td style="padding:8px 12px;text-align:right">'+Math.round(p.dStops||0)+'</td></tr>' +
+          '<tr style="background:#f9fafb"><td style="padding:8px 12px">This Week ('+p.wDays+' days)</td><td style="padding:8px 12px;text-align:right;font-weight:700">'+fmt(p.w)+'</td><td style="padding:8px 12px;text-align:right">'+Math.round(p.mStops||0)+'</td></tr>' +
+          '<tr><td style="padding:8px 12px">This Month '+month+' ('+p.mDays+' days)</td><td style="padding:8px 12px;text-align:right;font-weight:700">'+fmt(p.m)+'</td><td style="padding:8px 12px;text-align:right">'+Math.round(p.mStops||0)+'</td></tr>' +
+          '<tr style="background:#fef9c3"><td style="padding:8px 12px;font-size:11px;color:#6b7280" colspan="3">'+p.detail+'</td></tr>' +
+        '</table>' +
       '</div>'
     ).join('') +
     '</div>' +
-    '<div style="margin-top:16px;text-align:center">' +
-      '<button onclick="printAllPartnerPdfs(\''+date+'\')" style="background:#1a1a2e;color:#fff;border:none;border-radius:7px;padding:10px 24px;cursor:pointer;font-size:14px;font-weight:600">🖨️ Print ALL Partner Reports</button>' +
-    '</div>' +
+    '<div style="margin-top:14px;text-align:center">' +
+      '<button onclick="printAllFleetPdfFull(\''+date+'\')" style="background:#1a1a2e;color:#fff;border:none;border-radius:7px;padding:10px 24px;cursor:pointer;font-size:14px;font-weight:600">🖨️ Print ALL — Full Reports</button>' +
     '</div>';
-  document.body.appendChild(mo);
+  window._pdfPartnersData = partners;
+  window._pdfDate = date;
 }
+
+function printPartnerPdfFull(partnerName, date) {
+  const partners = window._pdfPartnersData || [];
+  const p = partners.find(x => x.name === partnerName);
+  if (!p) return;
+  const allRecs = window._pdfAllRecs || [];
+  const month = date.substring(0,7);
+  const monthRecs = allRecs.filter(r => r.date && r.date.substring(0,7) === month);
+
+  const win = window.open('', '_blank', 'width=700,height=900');
+  win.document.write(`<!DOCTYPE html><html><head><title>${partnerName} — ${date}</title>
+<style>
+*{box-sizing:border-box} body{font-family:Arial,sans-serif;padding:32px;color:#111;max-width:600px;margin:0 auto}
+.logo{font-size:24px;font-weight:900;color:#e85d04} .subtitle{font-size:12px;color:#6b7280;margin-bottom:24px}
+h1{font-size:20px;border-bottom:3px solid ${p.color};padding-bottom:8px;margin-bottom:20px}
+.period{background:${p.color};color:#fff;border-radius:8px;padding:10px 16px;margin-bottom:8px;display:flex;justify-content:space-between;align-items:center}
+.period .label{font-size:13px;font-weight:600} .period .amount{font-size:20px;font-weight:900}
+.detail-row{display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid #f3f4f6;font-size:13px}
+.monthly-table{width:100%;border-collapse:collapse;margin-top:20px;font-size:12px}
+.monthly-table th{background:#f3f4f6;padding:6px 10px;text-align:left;border-bottom:2px solid #e5e7eb}
+.monthly-table td{padding:5px 10px;border-bottom:1px solid #f3f4f6}
+.footer{margin-top:32px;font-size:10px;color:#9ca3af;border-top:1px solid #e5e7eb;padding-top:8px;text-align:center}
+@media print{.noprint{display:none}}
+</style></head><body>
+<div class="logo">BellaBona</div>
+<div class="subtitle">Logistic Management System — Berlin</div>
+<h1>${p.icon} ${partnerName} — Payment Report</h1>
+
+<div class="period"><span class="label">📅 Today — ${date}</span><span class="amount">€${(p.d||0).toFixed(2)}</span></div>
+<div class="period" style="background:#374151"><span class="label">📆 This Week (${p.wDays} days)</span><span class="amount">€${(p.w||0).toFixed(2)}</span></div>
+<div class="period" style="background:#1a1a2e"><span class="label">🗓️ This Month — ${month} (${p.mDays} days)</span><span class="amount">€${(p.m||0).toFixed(2)}</span></div>
+
+<div style="margin-top:20px;padding:12px;background:#f9fafb;border-radius:6px;font-size:12px;color:#374151">
+  <strong>Today's Detail:</strong> ${p.detail}
+</div>
+
+<h3 style="margin-top:24px;font-size:14px">Daily Breakdown — ${month}</h3>
+<table class="monthly-table">
+<thead><tr><th>Date</th><th>Payable</th><th>Stops</th></tr></thead>
+<tbody>
+${monthRecs.map(r => {
+  let cost = 0, stops = 0;
+  if (partnerName==='Ali & Jozef') { cost=(r.aliCost||0)+(r.jozefCost||0); stops=(r.aliStops||0)+(r.ali2stops||0)+(r.jozefStops||0); }
+  else if (partnerName==='Samir') { cost=r.samirCost||0; stops=r.samirStops||0; }
+  else if (partnerName==='Packator Fleet') { cost=r.packatorCost||0; stops=(r.p1stops||0)+(r.p2stops||0)+(r.p3stops||0)+(r.p4stops||0)+(r.p5stops||0)+(r.p6stops||0); }
+  else if (partnerName==='Mykhailo') { cost=r.mykhailoRate||r.mykhailoCost||0; stops=r.mykhailoStops||0; }
+  return `<tr><td>${r.date}</td><td style="font-weight:600">€${cost.toFixed(2)}</td><td>${Math.round(stops)}</td></tr>`;
+}).join('')}
+</tbody>
+</table>
+
+<div style="text-align:right;margin-top:16px" class="noprint">
+  <button onclick="window.print()" style="background:${p.color};color:#fff;border:none;border-radius:6px;padding:10px 24px;cursor:pointer;font-size:14px;font-weight:700">🖨️ Save as PDF</button>
+</div>
+<div class="footer">BellaBona Logistic Management · Generated ${new Date().toLocaleString('de-DE')} · Confidential</div>
+</body></html>`);
+  win.document.close();
+}
+
+function printAllFleetPdfFull(date) {
+  ['Ali & Jozef','Samir','Packator Fleet','Mykhailo'].forEach((p,i) => {
+    setTimeout(() => printPartnerPdfFull(p, date), i * 600);
+  });
+}
+
 
 function printPartnerPdf(partnerName, date) {
   const c = window._kpiCalc || {};
