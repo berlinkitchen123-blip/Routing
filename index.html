@@ -4,6 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>BellaBona LMM</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns=%27http://www.w3.org/2000/svg%27 viewBox=%270 0 100 100%27><text y=%27.9em%27 font-size=%2790%27>🚚</text></svg>">
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.2/dist/chart.umd.min.js"></script>
@@ -615,9 +616,9 @@ function initDashMap(routes) {
     });
   });
 
-  // Live GPS: fetch initial positions
+  // Live GPS: fetch initial positions (skip when no local server)
   try {
-    fetch(`${API_BASE}/api/tracking/live`).then(r=>r.json()).then(positions=>{
+    if(API_BASE) fetch(`${API_BASE}/api/tracking/live`).then(r=>r.json()).then(positions=>{
       const drivers = Array.isArray(positions) ? positions : (positions.drivers||[]);
       drivers.forEach(drv=>{
         const lat = drv.latitude||drv.lat;
@@ -634,9 +635,25 @@ function initDashMap(routes) {
     }).catch(()=>{});
   } catch(e){}
 
-  // Live GPS: Socket.io real-time updates
+  // Live GPS: Use Firebase RTDB when no local server; socket.io otherwise
   try {
-    if(typeof io !== 'undefined') {
+    if (!API_BASE) {
+      // Firebase Realtime Database for live GPS
+      try {
+        const fbGpsUrl = 'https://routing-22aad-default-rtdb.europe-west1.firebasedatabase.app/gps.json';
+        fetch(fbGpsUrl).then(r=>r.json()).then(snap=>{
+          if(!snap) return;
+          Object.entries(snap).forEach(([id,drv])=>{
+            const lat=drv.lat||drv.latitude, lng=drv.lng||drv.longitude;
+            if(!lat||!lng||!leafletMap) return;
+            const name=drv.name||id, initials=name.substring(0,2).toUpperCase();
+            const icon=L.divIcon({className:'',html:'<div style="background:#f97316;color:#fff;border-radius:50%;width:30px;height:30px;display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:700;border:2px solid #fff;box-shadow:0 2px 6px rgba(0,0,0,0.4)">'+initials+'</div>',iconSize:[30,30],iconAnchor:[15,15]});
+            const marker=L.marker([lat,lng],{icon}).addTo(leafletMap).bindPopup('<b>'+name+'</b>');
+            _liveDriverMarkers[id]=marker;
+          });
+        }).catch(()=>{});
+      } catch(e2){}
+    } else if(typeof io !== 'undefined') {
       _liveSocket = io(API_BASE,{transports:['websocket'],reconnection:true,reconnectionAttempts:3});
       _liveSocket.on('connect',()=>{
         const badge = document.getElementById('live-map-badge');
@@ -765,6 +782,14 @@ async function planLoadOrders() {
   const btn = (typeof event !== 'undefined' && event?.target?.tagName === 'BUTTON') ? event.target : null;
   if(btn) { btn.disabled=true; btn.textContent='Loading…'; }
   const bodyEl = document.getElementById('plan-body');
+  // If no local server configured, skip server fetch and prompt JSON import
+  if (!API_BASE) {
+    if(bodyEl) bodyEl.innerHTML =
+      '<div style="background:#fffbeb;border:1px solid #fde68a;border-radius:8px;padding:14px 18px;color:#92400e;font-size:13px">' +
+      '📋 <b>Cloud mode</b> — no local server connected. Import today\'s orders by pasting the OMS JSON, or use the JSON import button above.</div>';
+    if(btn) { btn.disabled=false; btn.textContent='↻ Reload from OMS'; }
+    return;
+  }
   if(bodyEl) bodyEl.innerHTML = '<div style="text-align:center;padding:40px;color:#9ca3af">⏳ Fetching live orders from OMS…</div>';
   try {
     const r = await fetch(`${API_BASE}/api/planning/orders?date=${_planDate}&kitchen=${_planKitchen}`);
