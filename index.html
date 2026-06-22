@@ -4472,24 +4472,24 @@ async function renderAnalytics() {
   // ── DISPATCHING COSTS — PACKATOR FLEET ──
   '<div style="background:#fff;border:1px solid #e5e7eb;border-radius:10px;padding:18px;margin-bottom:16px">' +
   '<div style="font-size:14px;font-weight:700;color:#111;margin-bottom:14px;padding-bottom:8px;border-bottom:2px solid #f3f4f6">🚐 Dispatching Costs — Packator Fleet <span style="font-size:12px;color:#6b7280;font-weight:400">(€16.83/stop)</span></div>' +
-  '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:10px">' +
-    _kf("Packator 1 Stops","kpi-p1stops","0") + _kf("Packator 2 Stops","kpi-p2stops","0") +
-    _kf("Packator 3 Stops","kpi-p3stops","0") + _kf("Packator 4 Stops","kpi-p4stops","0") +
-    _kf("Stadtbote 1 Stops","kpi-p5stops","0") + _kf("Stadtbote 2 Stops","kpi-p6stops","0") +
+  '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px">' +
+    _kfr("Packator 1","kpi-p1stops","0","kpi-p1-rate") + _kfr("Packator 2","kpi-p2stops","0","kpi-p2-rate") +
+    _kfr("Packator 3","kpi-p3stops","0","kpi-p3-rate") + _kfr("Packator 4","kpi-p4stops","0","kpi-p4-rate") +
+    _kfr("Stadtbote 1","kpi-p5stops","0","kpi-p5-rate") + _kfr("Stadtbote 2","kpi-p6stops","0","kpi-p6-rate") +
   '</div>' +
   '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:10px;margin-top:10px">' +
     _kf("Total Dispatch Cost Manual (€)","kpi-packatorDispatch","0") +
-    _kf("Samir Stops","kpi-samirStops","0") + _kf("Samir Pickup Stops","kpi-samirPickup","0") +
+    _kfr("Samir Stops","kpi-samirStops","0","kpi-samir-rate") + _kf("Samir Pickup Stops (€10 each)","kpi-samirPickup","0") +
     _kf("Mykhailo Stops","kpi-mykhailoStops","0") + _kf("Mykhailo Rate (€)","kpi-mykhailoRate","0") +
   '</div></div>' +
 
   // ── ALI & JOZEF FLEET ──
   '<div style="background:#fff;border:1px solid #e5e7eb;border-radius:10px;padding:18px;margin-bottom:16px">' +
   '<div style="font-size:14px;font-weight:700;color:#111;margin-bottom:14px;padding-bottom:8px;border-bottom:2px solid #f3f4f6">🏎️ Ali & Jozef Fleet <span style="font-size:12px;color:#6b7280;font-weight:400">(1-4:€110 · 5:€115 · 6:€125 · 7:€140)</span></div>' +
-  '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px">' +
-    _kf("Jozef Stops","kpi-jozefStops","0") + _kf("Ali Stops","kpi-aliStops","0") +
-    _kf("Ali 2 Stops","kpi-ali2stops","0") + _kf("Ali 3 Stops","kpi-ali3stops","0") +
-    _kf("Ali 4 Stops","kpi-ali4stops","0") +
+  '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:10px">' +
+    _kfr("Jozef","kpi-jozefStops","0","kpi-jozef-rate") + _kfr("Ali","kpi-aliStops","0","kpi-ali-rate") +
+    _kfr("Ali 2","kpi-ali2stops","0","kpi-ali2-rate") + _kfr("Ali 3","kpi-ali3stops","0","kpi-ali3-rate") +
+    _kfr("Ali 4","kpi-ali4stops","0","kpi-ali4-rate") +
   '</div></div>' +
 
   // ── INTERNAL & EXTRA COSTS ──
@@ -4555,6 +4555,11 @@ async function renderAnalytics() {
   }, 100);
 }
 
+function _kfr(label, id, val, rateId) {
+  return '<div><label style="font-size:11px;font-weight:600;color:#374151;display:flex;justify-content:space-between;margin-bottom:3px">'+
+    '<span>'+label+'</span><span id="'+rateId+'" style="color:#e85d04;font-weight:700">€0</span></label>' +
+    '<input id="'+id+'" type="number" step="1" value="'+val+'" style="width:100%;border:1px solid #d1d5db;border-radius:6px;padding:6px 10px;font-size:13px"></div>';
+}
 function _kf(label, id, val) {
   return '<div><label style="font-size:11px;font-weight:600;color:#374151;display:block;margin-bottom:3px">'+label+'</label>' +
     '<input id="'+id+'" type="number" step="0.01" value="'+val+'" style="width:100%;border:1px solid #d1d5db;border-radius:6px;padding:6px 10px;font-size:13px"></div>';
@@ -4571,24 +4576,53 @@ function _kpiCard(label, id, val, color) {
 function _v(id) { return parseFloat(document.getElementById(id)?.value)||0; }
 
 function _recalcKpi() {
-  // Pricing logic matching the original app
-  const PACKATOR_RATE = 16.83;
+  // ── EXACT formulas from usekpiCalculations.ts ──
 
-  // Packator fleet
+  // Samir: tiered + pickups×€10
+  function _samirCost(stops, pickups) {
+    if (stops <= 0) return 0;
+    let base = stops<=4?75:stops===5?85:stops===6?95:stops===7?110:stops===8?120:120+(stops-8)*15;
+    return base + pickups * 10;
+  }
+
+  // Ali, Ali2, Ali3, Ali4, Jozef — all use same NEW standard rate (Feb 2026+)
+  function _stdRate(stops) {
+    if (stops <= 0) return 0;
+    if (stops <= 4) return 110;
+    if (stops === 5) return 115;
+    if (stops === 6) return 125;
+    return 125 + (stops - 6) * 15; // 7→140, 8→155, etc.
+  }
+
+  // Packator NEW pricing (Feb 2026+): 3-4:€101, 5+: 101+(n-4)×14
+  function _packatorRate(stops) {
+    if (stops <= 2) return 0;
+    if (stops <= 4) return 101;
+    return 101 + (stops - 4) * 14;
+  }
+
+  // Per-packator costs
+  const p1cost = _packatorRate(_v('kpi-p1stops'));
+  const p2cost = _packatorRate(_v('kpi-p2stops'));
+  const p3cost = _packatorRate(_v('kpi-p3stops'));
+  const p4cost = _packatorRate(_v('kpi-p4stops'));
+  const p5cost = _packatorRate(_v('kpi-p5stops')); // Stadtbote 1
+  const p6cost = _packatorRate(_v('kpi-p6stops')); // Stadtbote 2
+  const packatorServiceCost = p1cost + p2cost + p3cost + p4cost + p5cost + p6cost;
+  const packatorCost = packatorServiceCost + _v('kpi-packatorDispatch');
   const packatorStops = _v('kpi-p1stops')+_v('kpi-p2stops')+_v('kpi-p3stops')+_v('kpi-p4stops')+_v('kpi-p5stops')+_v('kpi-p6stops');
-  const packatorCost = packatorStops * PACKATOR_RATE + _v('kpi-packatorDispatch');
 
-  // Samir pricing: 4:€75, 6:€95, 7:€110, 8:€120, >8: 120+(n-8)*15
+  // Samir
   const sStops = _v('kpi-samirStops');
-  const samirCost = sStops<=4?75:sStops<=5?85:sStops<=6?95:sStops<=7?110:sStops<=8?120:120+(sStops-8)*15;
-  const samirPickupCost = _v('kpi-samirPickup') * 20;
+  const samirPickups = _v('kpi-samirPickup');
+  const samirCost = _samirCost(sStops, samirPickups);
+  const samirPickupCost = 0; // already included in samirCost via _samirCost
 
-  // Ali & Jozef pricing (Feb 2026+): 1-4:€110, 5:€115, 6:€125, 7:€140
-  function aliRate(n){ return n<=0?0:n<=4?110:n===5?115:n===6?125:140+(n-7)*15; }
-  const aliCost = aliRate(_v('kpi-aliStops'))+aliRate(_v('kpi-ali2stops'))+aliRate(_v('kpi-ali3stops'))+aliRate(_v('kpi-ali4stops'));
-  const jozefCost = aliRate(_v('kpi-jozefStops'));
+  // Ali & Jozef
+  const aliCost  = _stdRate(_v('kpi-aliStops')) + _stdRate(_v('kpi-ali2stops')) + _stdRate(_v('kpi-ali3stops')) + _stdRate(_v('kpi-ali4stops'));
+  const jozefCost = _stdRate(_v('kpi-jozefStops'));
 
-  // Mykhailo: direct cost
+  // Mykhailo: direct cost entry
   const mykhailoCost = _v('kpi-mykhailoRate');
 
   // Internal costs
@@ -4611,6 +4645,19 @@ function _recalcKpi() {
   set('kpi-out-logcost','€'+totalLogCost.toFixed(0));
   set('kpi-out-profit', (netProfit>=0?'€':'−€')+Math.abs(netProfit).toFixed(0));
   set('kpi-out-cpstop','€'+cpStop);
+  // Also update Packator rate display
+  const p1el=document.getElementById('kpi-p1-rate');if(p1el)p1el.textContent='€'+p1cost.toFixed(0);
+  const p2el=document.getElementById('kpi-p2-rate');if(p2el)p2el.textContent='€'+p2cost.toFixed(0);
+  const p3el=document.getElementById('kpi-p3-rate');if(p3el)p3el.textContent='€'+p3cost.toFixed(0);
+  const p4el=document.getElementById('kpi-p4-rate');if(p4el)p4el.textContent='€'+p4cost.toFixed(0);
+  const p5el=document.getElementById('kpi-p5-rate');if(p5el)p5el.textContent='€'+p5cost.toFixed(0);
+  const p6el=document.getElementById('kpi-p6-rate');if(p6el)p6el.textContent='€'+p6cost.toFixed(0);
+  const scEl=document.getElementById('kpi-samir-rate');if(scEl)scEl.textContent='€'+samirCost.toFixed(0);
+  const a1El=document.getElementById('kpi-ali-rate');if(a1El)a1El.textContent='€'+_stdRate(_v('kpi-aliStops')).toFixed(0);
+  const a2El=document.getElementById('kpi-ali2-rate');if(a2El)a2El.textContent='€'+_stdRate(_v('kpi-ali2stops')).toFixed(0);
+  const a3El=document.getElementById('kpi-ali3-rate');if(a3El)a3El.textContent='€'+_stdRate(_v('kpi-ali3stops')).toFixed(0);
+  const a4El=document.getElementById('kpi-ali4-rate');if(a4El)a4El.textContent='€'+_stdRate(_v('kpi-ali4stops')).toFixed(0);
+  const jEl=document.getElementById('kpi-jozef-rate');if(jEl)jEl.textContent='€'+jozefCost.toFixed(0);
   set('kpi-out-mstop',''+mealsPerStop);
   set('kpi-out-pct',''+logPct+'%');
   set('kpi-out-stops',''+Math.round(totalStops));
@@ -4629,8 +4676,9 @@ function _recalcKpi() {
       [
         ['Ali (Total Payable)', aliCost],
         ['Jozef (Payable)', jozefCost],
-        ['Packator (Service)', packatorCost],
-        ['Samir (Payable)', samirCost + samirPickupCost],
+        ['Packator Fleet (Service)', packatorServiceCost],
+        ['Packator Dispatch (Manual)', _v('kpi-packatorDispatch')],
+        ['Samir (incl. '+(samirPickups>0?samirPickups+' pickup':'no pickup')+')', samirCost],
         ['Mykhailo (Payable)', mykhailoCost],
         ['Internal Fleet', internalCost],
         ['Extra Costs', extraCost],
