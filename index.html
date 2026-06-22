@@ -1221,47 +1221,40 @@ function _paintPlanGrid() {
           td.appendChild(noteDiv);
         }
 
-        // Drag events on td itself — supports insert-between
+        // Drag events — insert-between using module-level _planDropTarget/_planDropPos
         td.addEventListener('dragstart', function(e){
-          e.dataTransfer.effectAllowed='move';
+          e.dataTransfer.effectAllowed = 'move';
           _planDragId = this.dataset.id;
-          this.style.opacity='0.4';
+          this.style.opacity = '0.4';
         });
-        td.addEventListener('dragend', function(e){ this.style.opacity=''; });
+        td.addEventListener('dragend', function(){ this.style.opacity = ''; });
         td.addEventListener('dragover', function(e){
           e.preventDefault(); e.stopPropagation();
+          _planDropTarget = this.dataset.id;
           const rect = this.getBoundingClientRect();
-          if (e.clientY < rect.top + rect.height / 2) {
-            this.style.borderTop = '3px solid #e85d04';
-            this.style.borderBottom = '';
-            this.dataset.dropPos = 'before';
-          } else {
-            this.style.borderBottom = '3px solid #e85d04';
-            this.style.borderTop = '';
-            this.dataset.dropPos = 'after';
-          }
+          const upper = e.clientY < rect.top + rect.height / 2;
+          _planDropPos = upper ? 'before' : 'after';
+          this.style.borderTop    = upper ? '3px solid #e85d04' : '';
+          this.style.borderBottom = upper ? '' : '3px solid #e85d04';
         });
-        td.addEventListener('dragleave', function(e){
-          this.style.borderTop=''; this.style.borderBottom='';
+        td.addEventListener('dragleave', function(){
+          this.style.borderTop = ''; this.style.borderBottom = '';
         });
         td.addEventListener('drop', function(e){
           e.preventDefault(); e.stopPropagation();
-          this.style.borderTop=''; this.style.borderBottom='';
+          this.style.borderTop = ''; this.style.borderBottom = '';
           const targetDriver = this.dataset.driver;
-          const targetId = this.dataset.id;       // stop being dropped ON
-          const pos = this.dataset.dropPos || 'after';
-          if (!_planDragId || _planDragId === targetId) return;
-          // Find dragged stop object
+          const targetId     = _planDropTarget || this.dataset.id;
+          const pos          = _planDropPos || 'after';
+          _planDropTarget = null;
+          if (!_planDragId || _planDragId === targetId) { _planDragId = null; return; }
           const dragged = _planStops.find(s => s.branchId === _planDragId);
-          if (!dragged) return;
-          // Remove from current position
+          if (!dragged) { _planDragId = null; return; }
           _planStops = _planStops.filter(s => s.branchId !== _planDragId);
-          // Find target index in (now-modified) array
           const targetIdx = _planStops.findIndex(s => s.branchId === targetId);
-          const insertAt = targetIdx < 0 ? _planStops.length
-                         : (pos === 'before' ? targetIdx : targetIdx + 1);
+          const insertAt  = targetIdx < 0 ? _planStops.length
+                          : (pos === 'before' ? targetIdx : targetIdx + 1);
           _planStops.splice(insertAt, 0, dragged);
-          // Assign to target driver
           _planAssign[_planDragId] = targetDriver;
           _planDragId = null;
           _paintPlanGrid();
