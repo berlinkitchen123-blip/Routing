@@ -1132,8 +1132,12 @@ function _paintPlanGrid() {
     const th = document.createElement('th');
     th.style.cssText = 'background:' + colColor(driver) + ';border:2px solid #111;padding:7px 10px;font-size:13px;font-weight:700;text-align:center;min-width:150px;width:160px;cursor:default;white-space:nowrap';
     th.dataset.driver = driver;
-    th.setAttribute('ondragover', 'event.preventDefault()');
-    th.setAttribute('ondrop', '_planDrop(this,event)');
+    th.addEventListener('dragover', function(e){ e.preventDefault(); e.stopPropagation(); });
+    th.addEventListener('drop', function(e){
+      e.preventDefault(); e.stopPropagation();
+      const d = this.dataset.driver;
+      if (d && _planDragId) { _planAssign[_planDragId]=d; _planDragId=null; _paintPlanGrid(); }
+    });
     const cnt = colStops[driver].length;
     th.innerHTML = (driver === 'Unassigned' ? '&#9888; New Stops' : driver) +
       '<br><span style="font-size:10px;font-weight:400;color:#374151">' + cnt + ' stops</span>';
@@ -1164,46 +1168,80 @@ function _paintPlanGrid() {
       if (s) {
         td.draggable = true;
         td.dataset.id = s.branchId;
-        td.setAttribute('ondragstart', 'planDragStart(event,this.dataset.id)');
 
         const noOrder = s.hasOrder === false;
         const isPickup = (s.templateName || s.company).toLowerCase().startsWith('pickup');
         const note = _planNotes[s.branchId] || '';
 
-        if (noOrder)       { td.style.background = '#fee2e2'; td.style.color = '#b91c1c'; td.style.textDecoration = 'line-through'; td.style.opacity = '0.8'; }
+        if (noOrder)       { td.style.background = '#fee2e2'; td.style.color = '#b91c1c'; }
         else if (isPickup) { td.style.background = '#f0fdf4'; td.style.color = '#166534'; }
-        else if (note)     { td.style.background = '#faf5ff'; }
-        else               { td.style.background = '#fff'; }
+        else if (note)     { td.style.background = '#faf5ff'; td.style.color = '#111'; }
+        else               { td.style.background = '#fff'; td.style.color = '#111'; }
 
         const sn = shortName(s.company);
         const cnt = s.orderCount > 1 ? ' (' + s.orderCount + ')' : '';
         td.title = s.company + '\n' + s.address + ', ' + s.postCode + '\n' + (noOrder ? 'No order today' : s.orderCount + ' orders');
 
-        const row2 = document.createElement('div');
-        row2.style.cssText = 'display:flex;justify-content:space-between;align-items:center;gap:3px';
+        // Inner content — pointer-events:none so drag always fires on td
+        const inner = document.createElement('div');
+        inner.style.cssText = 'display:flex;justify-content:space-between;align-items:center;gap:3px;pointer-events:none';
 
-        const span = document.createElement('span');
-        span.style.fontWeight = noOrder ? '400' : '600';
-        span.textContent = (noOrder ? 'X ' : '') + sn + cnt;
-        row2.appendChild(span);
+        const nameSpan = document.createElement('span');
+        nameSpan.style.cssText = 'font-weight:' + (noOrder ? '400' : '600') + ';text-decoration:' + (noOrder ? 'line-through' : 'none') + ';font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap';
+        nameSpan.textContent = sn + cnt;
+        inner.appendChild(nameSpan);
+
+        // Action buttons (re-enable pointer events just for buttons)
+        const btnWrap = document.createElement('span');
+        btnWrap.style.cssText = 'display:flex;gap:2px;flex-shrink:0;pointer-events:auto';
 
         const editBtn = document.createElement('span');
         editBtn.textContent = '✎';
         editBtn.title = 'Add note';
-        editBtn.style.cssText = 'cursor:pointer;color:#9ca3af;font-size:11px;flex-shrink:0';
+        editBtn.style.cssText = 'cursor:pointer;color:#9ca3af;font-size:11px;padding:0 2px';
         const bid = s.branchId, snCopy = sn;
-        editBtn.onclick = (e) => { e.stopPropagation(); planEditNote(bid, snCopy); };
-        row2.appendChild(editBtn);
-        td.appendChild(row2);
+        editBtn.addEventListener('click', function(e){ e.stopPropagation(); e.preventDefault(); planEditNote(bid, snCopy); });
+        btnWrap.appendChild(editBtn);
+
+        const delBtn = document.createElement('span');
+        delBtn.textContent = '×';
+        delBtn.title = 'Remove from plan';
+        delBtn.style.cssText = 'cursor:pointer;color:#ef4444;font-size:13px;font-weight:700;padding:0 2px;line-height:1';
+        const compCopy = s.company;
+        delBtn.addEventListener('click', function(e){ e.stopPropagation(); e.preventDefault(); planDeleteStop(bid, compCopy); });
+        btnWrap.appendChild(delBtn);
+
+        inner.appendChild(btnWrap);
+        td.appendChild(inner);
 
         if (note) {
           const noteDiv = document.createElement('div');
-          noteDiv.style.cssText = 'font-size:10px;color:#7c3aed;margin-top:2px;font-style:italic';
+          noteDiv.style.cssText = 'font-size:10px;color:#7c3aed;margin-top:2px;font-style:italic;pointer-events:none';
           noteDiv.textContent = note;
           td.appendChild(noteDiv);
         }
+
+        // Drag events on td itself
+        td.addEventListener('dragstart', function(e){ e.dataTransfer.effectAllowed='move'; _planDragId=this.dataset.id; });
+        td.addEventListener('dragover', function(e){ e.preventDefault(); e.stopPropagation(); this.style.outline='2px solid #e85d04'; });
+        td.addEventListener('dragleave', function(e){ this.style.outline=''; });
+        td.addEventListener('drop', function(e){
+          e.preventDefault(); e.stopPropagation();
+          this.style.outline='';
+          const d = this.dataset.driver || this.closest('[data-driver]')?.dataset.driver;
+          if (d && _planDragId) { _planAssign[_planDragId]=d; _planDragId=null; _paintPlanGrid(); }
+        });
       } else {
         td.style.background = '#fafafa';
+        // Empty cell — still a valid drop target
+        td.addEventListener('dragover', function(e){ e.preventDefault(); e.stopPropagation(); this.style.background='#dbeafe'; });
+        td.addEventListener('dragleave', function(e){ this.style.background='#fafafa'; });
+        td.addEventListener('drop', function(e){
+          e.preventDefault(); e.stopPropagation();
+          this.style.background='#fafafa';
+          const d = this.dataset.driver;
+          if (d && _planDragId) { _planAssign[_planDragId]=d; _planDragId=null; _paintPlanGrid(); }
+        });
       }
       row.insertCell(-1).replaceWith(td);
     });
@@ -1242,12 +1280,22 @@ function _paintPlanGrid() {
 
 function _planDrop(el, e) {
   e.preventDefault();
-  const d = el.dataset.driver || el.closest('[data-driver]')?.dataset.driver;
-  if (d) { if (!_planDragId) return; _planAssign[_planDragId]=d; _planDragId=null; _paintPlanGrid(); }
+  e.stopPropagation();
+  const cell = el.dataset.driver ? el : el.closest('[data-driver]');
+  const d = cell ? cell.dataset.driver : null;
+  if (d && _planDragId) { _planAssign[_planDragId] = d; _planDragId = null; _paintPlanGrid(); }
 }
 function planDragStart(e, branchId) {
   _planDragId = branchId;
   e.dataTransfer.effectAllowed = 'move';
+}
+
+function planDeleteStop(branchId, companyName) {
+  if (!confirm('Remove "' + companyName + '" from the plan?\nThis removes it from the weekly template too when you save.')) return;
+  _planStops = _planStops.filter(s => s.branchId !== branchId);
+  delete _planAssign[branchId];
+  delete _planNotes[branchId];
+  _paintPlanGrid();
 }
 
 function planDrop(e, driver) {
