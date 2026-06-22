@@ -10,6 +10,23 @@
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.2/dist/chart.umd.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <script src="https://cdn.socket.io/4.7.4/socket.io.min.js"></script>
+<script type="module">
+// Firebase for weekly templates & GPS
+import { initializeApp, getApps } from 'https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js';
+import { getFirestore, doc, getDoc, setDoc, collection } from 'https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js';
+import { getAuth, signInAnonymously } from 'https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js';
+const _fbCfg = {apiKey:"AIzaSyBr46XcXJPfxtxl6GpTmQPU7dPl68RuVXs",authDomain:"routing-22aad.firebaseapp.com",projectId:"routing-22aad"};
+const _fbApp = getApps().length ? getApps()[0] : initializeApp(_fbCfg);
+const _fbDb  = getFirestore(_fbApp);
+const _fbAuth = getAuth(_fbApp);
+signInAnonymously(_fbAuth).catch(()=>{});
+window._fbDb = _fbDb;
+window._fbDoc = doc;
+window._fbGetDoc = getDoc;
+window._fbSetDoc = setDoc;
+window._fbCollection = collection;
+window._fbReady = true;
+</script>
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
 body{font-family:system-ui,-apple-system,sans-serif;display:flex;height:100vh;overflow:hidden;background:#f0f2f5}
@@ -202,6 +219,7 @@ tbody tr{transition:background 0.1s;cursor:pointer}
 
 <script>
 let API_BASE = (() => { try { return localStorage.getItem('lmm_api_base') || ''; } catch(e) { return ''; } })();
+let _weeklyTemplate = null;   // loaded from Firestore weeklyTemplates/{day}
 
 const MUNICH_ROUTES = [
   {name:'Adrian',stops:2,boxes:6,weight:84,start:'11:30',end:'11:38',late:0,city:'Munich',color:'#6366f1'},
@@ -770,6 +788,7 @@ async function renderPlanning() {
     '<button class="btn" style="background:#10b981;color:#fff;border-color:#10b981" onclick="planSaveToApp()">💾 Save → Driver App</button>' +
     '<button class="btn" style="background:#217346;color:#fff;border-color:#217346" onclick="planExportExcel()">📊 Export Excel</button>' +
     '<button class="btn" style="background:#25d366;color:#fff;border-color:#25d366" onclick="planWhatsApp()">💬 WhatsApp</button>' +
+    '<button class="btn" style="background:#1a1a2e;color:#fff;border-color:#1a1a2e" onclick="saveWeeklyTemplate()">💾 Save as Weekly Template</button>' +
   '</div>' +
 
   '<div id="plan-body"><div style="text-align:center;padding:60px;color:#9ca3af">⏳ Loading orders from OMS…</div></div>' +
@@ -783,11 +802,9 @@ async function planLoadOrders() {
   const btn = (typeof event !== 'undefined' && event?.target?.tagName === 'BUTTON') ? event.target : null;
   if(btn) { btn.disabled=true; btn.textContent='Loading…'; }
   const bodyEl = document.getElementById('plan-body');
-  // If no local server configured, skip server fetch and prompt JSON import
+  // Cloud mode — load weekly template + match against any injected _planStops
   if (!API_BASE) {
-    if(bodyEl) bodyEl.innerHTML =
-      '<div style="background:#fffbeb;border:1px solid #fde68a;border-radius:8px;padding:14px 18px;color:#92400e;font-size:13px">' +
-      '📋 <b>Cloud mode</b> — no local server connected. Import today\'s orders by pasting the OMS JSON, or use the JSON import button above.</div>';
+    await loadFromWeeklyTemplate(bodyEl);
     if(btn) { btn.disabled=false; btn.textContent='↻ Reload from OMS'; }
     return;
   }
@@ -874,6 +891,128 @@ async function planLastWeek() {
   btn.disabled=false; btn.textContent='📅 Use Last Week';
 }
 
+// ──────────────────────────────────────────────────────────────
+// WEEKLY TEMPLATE — load from Firestore, match against today's orders
+// ──────────────────────────────────────────────────────────────
+async function loadFromWeeklyTemplate(bodyEl) {
+  const DAY_NAMES = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
+  const dayName = DAY_NAMES[new Date(_planDate + 'T12:00:00').getDay()];
+
+  if(bodyEl) bodyEl.innerHTML = '<div style="text-align:center;padding:40px;color:#9ca3af">⏳ Loading weekly template for '+dayName+'…</div>';
+
+  if (!window._fbReady || !window._fbDb) {
+    if(bodyEl) bodyEl.innerHTML = '<div style="background:#fffbeb;border:1px solid #fde68a;border-radius:8px;padding:14px;color:#92400e;font-size:13px">⏳ Firebase loading, please try again in a moment.</div>';
+    return;
+  }
+
+  try {
+    const snap = await window._fbGetDoc(window._fbDoc(window._fbDb, 'weeklyTemplates', dayName));
+    if (!snap.exists()) {
+      if(bodyEl) bodyEl.innerHTML =
+        '<div style="background:#fffbeb;border:1px solid #fde68a;border-radius:8px;padding:14px;color:#92400e;font-size:13px">' +
+        '📋 No weekly template for <b>'+dayName+'</b> yet. Paste JSON or drag-drop to build one, then click <b>💾 Save as Weekly Template</b>.</div>';
+      return;
+    }
+    _weeklyTemplate = snap.data();
+
+    // _planStops may already be populated (from Paste JSON or manual injection)
+    // Build a map: normalised company name → stop data
+    const orderMap = {};
+    (_planStops||[]).forEach(s => {
+      const key = s.company.toLowerCase().replace(/[^a-z0-9]/g,'');
+      orderMap[key] = s;
+    });
+
+    function findOrder(templateName) {
+      const tKey = templateName.toLowerCase().replace(/[^a-z0-9]/g,'');
+      // exact
+      if (orderMap[tKey]) return orderMap[tKey];
+      // partial match
+      for (const [k, s] of Object.entries(orderMap)) {
+        if (k.includes(tKey.substring(0,6)) || tKey.includes(k.substring(0,6))) return s;
+      }
+      return null;
+    }
+
+    // Rebuild _planStops from template (ordered) + unmatched orders
+    const usedBranchIds = new Set();
+    const newStops = [];
+    _planAssign = {};
+    _planNotes  = {};
+
+    for (const [driver, companies] of Object.entries(_weeklyTemplate.routes || {})) {
+      for (const tmplName of companies) {
+        const ordered = findOrder(tmplName);
+        const id = ordered ? ordered.branchId : ('tmpl_' + tmplName.replace(/[^a-zA-Z0-9]/g,'_'));
+        if (ordered) usedBranchIds.add(ordered.branchId);
+        newStops.push({
+          branchId:    id,
+          company:     ordered ? ordered.company : tmplName,
+          templateName: tmplName,
+          address:     ordered ? ordered.address : '',
+          postCode:    ordered ? ordered.postCode : '',
+          deliveryInfo: ordered ? (ordered.deliveryInfo||'') : '',
+          orderCount:  ordered ? (ordered.orderCount||1) : 0,
+          hasOrder:    !!ordered,
+        });
+        _planAssign[id] = driver;
+      }
+    }
+
+    // Add any orders NOT matched to template → Unassigned
+    (_planStops||[]).forEach(s => {
+      if (!usedBranchIds.has(s.branchId)) {
+        newStops.push({...s, hasOrder:true});
+        _planAssign[s.branchId] = 'Unassigned';
+      }
+    });
+
+    _planStops = newStops;
+    _planDrivers = _weeklyTemplate.drivers || [...new Set(Object.values(_planAssign))].filter(d=>d!=='Unassigned').sort();
+
+    const ordered  = newStops.filter(s=>s.hasOrder).length;
+    const missing  = newStops.filter(s=>!s.hasOrder).length;
+    const unassigned = newStops.filter(s=>_planAssign[s.branchId]==='Unassigned').length;
+
+    if(bodyEl) bodyEl.innerHTML =
+      '<div style="background:#f0fdf4;border:1px solid #bbf7d0;border-radius:8px;padding:8px 14px;font-size:13px;color:#16a34a;margin-bottom:8px">' +
+      '✅ <b>'+dayName+' template loaded</b> · '+ordered+' ordered · ' +
+      '<span style="color:#dc2626;font-weight:700">'+missing+' not ordered today (red)</span>' +
+      (unassigned > 0 ? ' · '+unassigned+' new stops (left)' : '') + '</div>';
+
+    _paintPlanGrid();
+  } catch(e) {
+    if(bodyEl) bodyEl.innerHTML = '<div style="background:#fef2f2;border:1px solid #fecaca;border-radius:8px;padding:14px;color:#dc2626;font-size:13px">❌ '+e.message+'</div>';
+  }
+}
+
+async function saveWeeklyTemplate() {
+  if (!window._fbReady || !window._fbDb) { alert('Firebase not ready'); return; }
+  if (_planStops.length === 0) { alert('Load orders first'); return; }
+  const DAY_NAMES = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
+  const dayName = DAY_NAMES[new Date(_planDate + 'T12:00:00').getDay()];
+  const btn = event.target; btn.disabled=true; btn.textContent='Saving…';
+  try {
+    // Build routes from current assignment
+    const routes = {};
+    _planDrivers.filter(d=>d!=='Unassigned').forEach(d => { routes[d] = []; });
+    _planStops.forEach(s => {
+      const driver = _planAssign[s.branchId];
+      if (driver && driver !== 'Unassigned') {
+        routes[driver] = routes[driver] || [];
+        routes[driver].push(s.templateName || s.company);
+      }
+    });
+    const tmpl = { drivers: _planDrivers.filter(d=>d!=='Unassigned'), routes,
+      dispatchers: (_weeklyTemplate && _weeklyTemplate.dispatchers) || [],
+      updatedAt: new Date().toISOString() };
+    await window._fbSetDoc(window._fbDoc(window._fbDb,'weeklyTemplates',dayName), tmpl);
+    _weeklyTemplate = tmpl;
+    alert('✅ '+dayName+' template saved! Every future '+dayName+' will use this route.');
+  } catch(e) { alert('Error: '+e.message); }
+  btn.disabled=false; btn.textContent='💾 Save as Weekly Template';
+}
+
 function _paintPlanGrid() {
   if (_planStops.length === 0) return;
 
@@ -915,7 +1054,11 @@ function _paintPlanGrid() {
         (note?'<div style="font-size:10px;color:#7c3aed;font-style:italic">'+note+'</div>':'') +
       '</div>';
     }).join('') +
-    '</div></div>';
+    // Dispatcher row at bottom
+    '<div style="border:2px solid #000;border-top:2px solid #000;background:#1a1a2e;color:#fff;padding:5px 8px;font-size:11px;font-weight:700;text-align:center">' +
+    ((_weeklyTemplate&&_weeklyTemplate.dispatchers&&_weeklyTemplate.dispatchers[_planDrivers.indexOf(driver)])||'—') +
+    '</div>' +
+    '</div>';
   }).join('');
 
   // Red plates section — companies with specific equipment needs
