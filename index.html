@@ -1123,7 +1123,7 @@ async function planLastWeek() {
 // ──────────────────────────────────────────────────────────────
 // WEEKLY TEMPLATE — load from Firestore, match against today's orders
 // ──────────────────────────────────────────────────────────────
-async function loadFromWeeklyTemplate(bodyEl) {
+async function loadFromWeeklyTemplate(bodyEl, skipSavedPlan=false) {
   const DAY_NAMES = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
   const dayName = DAY_NAMES[new Date(_planDate + 'T12:00:00').getDay()];
 
@@ -1135,10 +1135,10 @@ async function loadFromWeeklyTemplate(bodyEl) {
   }
 
   try {
-    // ── Step 1: Check for a saved daily plan for this exact date ──
+    // ── Step 1: Check for a saved daily plan (skip when re-importing fresh JSON) ──
     const planKey = _planDate + '_' + _planKitchen;
-    const savedSnap = await window._fbGetDoc(window._fbDoc(window._fbDb, 'dailyPlans', planKey));
-    if (savedSnap.exists()) {
+    const savedSnap = !skipSavedPlan ? await window._fbGetDoc(window._fbDoc(window._fbDb, 'dailyPlans', planKey)) : { exists: () => false };
+    if (!skipSavedPlan && savedSnap.exists()) {
       const saved = savedSnap.data();
       const assignments = saved.assignments || [];
       // Restore stops
@@ -1188,11 +1188,17 @@ async function loadFromWeeklyTemplate(bodyEl) {
 
     function findOrder(templateName) {
       const tKey = templateName.toLowerCase().replace(/[^a-z0-9]/g,'');
-      // exact
+      // 1. Exact match
       if (orderMap[tKey]) return orderMap[tKey];
-      // partial match
+      // 2. One contains the other (full)
       for (const [k, s] of Object.entries(orderMap)) {
-        if (k.includes(tKey.substring(0,6)) || tKey.includes(k.substring(0,6))) return s;
+        if (k === tKey || k.includes(tKey) || tKey.includes(k)) return s;
+      }
+      // 3. Partial match on first 8 chars (more reliable than 6)
+      const t8 = tKey.substring(0,8);
+      for (const [k, s] of Object.entries(orderMap)) {
+        const k8 = k.substring(0,8);
+        if (t8.length >= 5 && (k.includes(t8) || tKey.includes(k8))) return s;
       }
       return null;
     }
@@ -2020,7 +2026,7 @@ async function importJsonData() {
     // Try to apply weekly template (auto-assigns to drivers, colors red if no order)
     const bodyEl = document.getElementById('plan-body');
     if (!API_BASE && window._fbReady) {
-      await loadFromWeeklyTemplate(bodyEl);
+      await loadFromWeeklyTemplate(bodyEl, true); // fresh JSON — always re-apply template
     } else {
       await planAutoAssign(true);
       _paintPlanGrid();
