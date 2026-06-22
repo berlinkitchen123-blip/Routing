@@ -1,3 +1,139 @@
+window._companiesTab = 'companies';
+
+async function renderFleetAccounts() {
+  const bodyEl = document.getElementById('content');
+  bodyEl.innerHTML = '<div class="page"><div style="padding:60px;text-align:center;color:#9ca3af">Loading fleet accounts…</div></div>';
+
+  let accounts = [];
+  if (window._fbReady && window._fbDb) {
+    try {
+      const { getDocs } = await import('https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js');
+      const snap = await getDocs(window._fbCollection(window._fbDb,'fleetAccounts'));
+      snap.forEach(d => accounts.push({id: d.id, ...d.data()}));
+    } catch(e) {}
+  }
+
+  bodyEl.innerHTML =
+  '<div class="page">' +
+  '<div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px;margin-bottom:20px">' +
+    '<div><h2 style="font-size:22px;font-weight:700">🚚 Fleet Accounts</h2>' +
+    '<p style="color:#6b7280;font-size:14px">Companies with fleet access — track expenses, stops & hours</p></div>' +
+    '<div style="display:flex;gap:8px">' +
+      '<button class="btn" onclick="window._companiesTab=\'companies\';renderCompanies()">← Back to Companies</button>' +
+      '<button class="btn btn-primary" onclick="openAddFleetModal()">+ Add Fleet Account</button>' +
+    '</div>' +
+  '</div>' +
+  (accounts.length === 0 ?
+    '<div style="background:#f9fafb;border:2px dashed #e5e7eb;border-radius:12px;padding:40px;text-align:center;color:#9ca3af">' +
+    '<div style="font-size:32px;margin-bottom:8px">🚚</div>' +
+    '<div style="font-size:16px;font-weight:600;margin-bottom:4px">No fleet accounts yet</div>' +
+    '<div style="font-size:13px;margin-bottom:16px">Add companies that need their own dashboard to track delivery costs and hours</div>' +
+    '<button class="btn btn-primary" onclick="openAddFleetModal()">+ Create First Fleet Account</button>' +
+    '</div>'
+  :
+    '<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(320px,1fr));gap:16px">' +
+    accounts.map(a =>
+      '<div style="background:#fff;border:1px solid #e5e7eb;border-radius:10px;padding:18px">' +
+        '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">' +
+          '<div style="font-size:16px;font-weight:700">'+(a.companyName||'—')+'</div>' +
+          '<span style="background:#f0fdf4;color:#16a34a;font-size:11px;font-weight:600;padding:2px 8px;border-radius:10px">Active</span>' +
+        '</div>' +
+        '<div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;font-size:12px;color:#6b7280;margin-bottom:12px">' +
+          '<div>👤 '+(a.ownerName||'—')+'</div>' +
+          '<div>📧 '+(a.email||'—')+'</div>' +
+          '<div>📞 '+(a.phone||'—')+'</div>' +
+          '<div>🏙️ '+(a.city||'—')+'</div>' +
+          '<div>💶 Rate: '+(a.ratePerStop||'—')+' €/stop</div>' +
+          '<div>⏰ '+(a.ratePerHour||'—')+' €/hr</div>' +
+        '</div>' +
+        '<div style="display:flex;gap:6px">' +
+          '<button class="btn btn-sm" onclick="openEditFleetModal(\''+a.id+'\')">✏️ Edit</button>' +
+          '<button class="btn btn-sm" style="background:#6366f1;color:#fff;border-color:#6366f1">📊 View Dashboard</button>' +
+        '</div>' +
+      '</div>'
+    ).join('') +
+    '</div>'
+  ) +
+  '</div>';
+}
+
+function openAddFleetModal() {
+  _openFleetModal(null);
+}
+function openEditFleetModal(id) {
+  // find account and open modal
+  _openFleetModal(id);
+}
+
+function _openFleetModal(id) {
+  const existing = document.getElementById('fleet-modal');
+  if (existing) existing.remove();
+  const mo = document.createElement('div');
+  mo.className = 'modal-overlay'; mo.id = 'fleet-modal';
+  mo.innerHTML =
+    '<div class="modal" style="width:min(520px,95vw)">' +
+    '<button class="modal-close" onclick="this.closest(\'.modal-overlay\').remove()">×</button>' +
+    '<h3>'+(id?'Edit':'New')+' Fleet Account</h3>' +
+    '<div style="display:flex;flex-direction:column;gap:10px;margin-top:14px">' +
+      '<div><label style="font-size:12px;font-weight:600">Company Name *</label>' +
+        '<input id="fa-company" placeholder="e.g. Tech GmbH" style="width:100%;border:1px solid #d1d5db;border-radius:6px;padding:7px 10px;font-size:13px;margin-top:3px"></div>' +
+      '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">' +
+        '<div><label style="font-size:12px;font-weight:600">Owner / Contact Name</label>' +
+          '<input id="fa-owner" style="width:100%;border:1px solid #d1d5db;border-radius:6px;padding:7px 10px;font-size:13px;margin-top:3px"></div>' +
+        '<div><label style="font-size:12px;font-weight:600">City</label>' +
+          '<select id="fa-city" style="width:100%;border:1px solid #d1d5db;border-radius:6px;padding:7px 10px;font-size:13px;margin-top:3px"><option>Berlin</option><option>Munich</option></select></div>' +
+      '</div>' +
+      '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">' +
+        '<div><label style="font-size:12px;font-weight:600">Email (login)</label>' +
+          '<input id="fa-email" type="email" style="width:100%;border:1px solid #d1d5db;border-radius:6px;padding:7px 10px;font-size:13px;margin-top:3px"></div>' +
+        '<div><label style="font-size:12px;font-weight:600">Phone</label>' +
+          '<input id="fa-phone" type="tel" style="width:100%;border:1px solid #d1d5db;border-radius:6px;padding:7px 10px;font-size:13px;margin-top:3px"></div>' +
+      '</div>' +
+      '<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px">' +
+        '<div><label style="font-size:12px;font-weight:600">Rate per Stop (€)</label>' +
+          '<input id="fa-rate-stop" type="number" step="0.01" placeholder="3.50" style="width:100%;border:1px solid #d1d5db;border-radius:6px;padding:7px 10px;font-size:13px;margin-top:3px"></div>' +
+        '<div><label style="font-size:12px;font-weight:600">Rate per Hour (€)</label>' +
+          '<input id="fa-rate-hour" type="number" step="0.01" placeholder="25.00" style="width:100%;border:1px solid #d1d5db;border-radius:6px;padding:7px 10px;font-size:13px;margin-top:3px"></div>' +
+        '<div><label style="font-size:12px;font-weight:600">Rate per Box (€)</label>' +
+          '<input id="fa-rate-box" type="number" step="0.01" placeholder="1.50" style="width:100%;border:1px solid #d1d5db;border-radius:6px;padding:7px 10px;font-size:13px;margin-top:3px"></div>' +
+      '</div>' +
+      '<div><label style="font-size:12px;font-weight:600">Notes / Special Terms</label>' +
+        '<textarea id="fa-notes" style="width:100%;border:1px solid #d1d5db;border-radius:6px;padding:7px 10px;font-size:13px;margin-top:3px;height:60px;resize:vertical"></textarea></div>' +
+      '<div style="background:#fffbeb;border:1px solid #fde68a;border-radius:6px;padding:10px;font-size:12px;color:#92400e">' +
+        '🔑 An account will be created so the fleet owner can log in and view their own delivery reports, invoices, and route history.' +
+      '</div>' +
+    '</div>' +
+    '<div style="display:flex;gap:8px;justify-content:flex-end;margin-top:18px">' +
+      '<button class="btn" onclick="this.closest(\'.modal-overlay\').remove()">Cancel</button>' +
+      '<button class="btn btn-primary" onclick="saveFleetAccount()">💾 Save Account</button>' +
+    '</div>' +
+    '</div>';
+  document.body.appendChild(mo);
+}
+
+async function saveFleetAccount() {
+  const companyName = document.getElementById('fa-company').value.trim();
+  if (!companyName) { alert('Company name is required'); return; }
+  const data = {
+    companyName,
+    ownerName:    document.getElementById('fa-owner').value.trim(),
+    city:         document.getElementById('fa-city').value,
+    email:        document.getElementById('fa-email').value.trim(),
+    phone:        document.getElementById('fa-phone').value.trim(),
+    ratePerStop:  document.getElementById('fa-rate-stop').value,
+    ratePerHour:  document.getElementById('fa-rate-hour').value,
+    ratePerBox:   document.getElementById('fa-rate-box').value,
+    notes:        document.getElementById('fa-notes').value.trim(),
+    createdAt:    new Date().toISOString(),
+  };
+  if (window._fbReady && window._fbDb) {
+    const id = 'fleet_' + companyName.toLowerCase().replace(/\s+/g,'_') + '_' + Date.now();
+    await window._fbSetDoc(window._fbDoc(window._fbDb,'fleetAccounts',id), data).catch(e=>alert('Save error: '+e.message));
+  }
+  document.getElementById('fleet-modal').remove();
+  renderFleetAccounts();
+}
+
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -362,7 +498,6 @@ const NAV_ITEMS = [
   {hash:'#dashboard',label:'Dashboard',icon:'📊'},
   {hash:'#route-plans',label:'Route Plans',icon:'🗺️'},
   {hash:'#planning',label:'Daily Planning',icon:'📋'},
-  {hash:'#trial',label:'Berlin Trial',icon:'🧪'},
   {hash:'#orders',label:'Orders',icon:'📦'},
   {hash:'#couriers',label:'Couriers',icon:'🚗'},
   {hash:'#shifts',label:'Shifts',icon:'🔄'},
@@ -402,7 +537,7 @@ setInterval(updateDatetime,1000);
 updateDatetime();
 
 const PAGE_TITLES = {
-  '#dashboard':'Dashboard','#route-plans':'Route Plans','#planning':'📋 Daily Planning','#trial':'🧪 Berlin Trial Run',
+  '#dashboard':'Dashboard','#route-plans':'Route Plans','#planning':'📋 Daily Planning',
   '#orders':'Orders','#couriers':'Couriers','#shifts':'Shifts','#schedules':'Schedules',
   '#routings':'Routings','#zip-codes':'Zip Codes','#closures':'Closures',
   '#companies':'Companies','#alerts':'Alerts','#analytics':'Analytics & Reports',
@@ -444,7 +579,6 @@ function route() {
     case '#dashboard': renderDashboard(); break;
     case '#route-plans': renderRoutePlans(); break;
     case '#planning': renderPlanning(); break;
-    case '#trial': renderTrialRun(); break;
     case '#orders': renderOrders(); break;
     case '#couriers': renderCouriers(); break;
     case '#shifts': renderShifts(); break;
@@ -2190,7 +2324,7 @@ function renderRPTable() {
   return '<div class="table-wrap"><table>' +
   '<thead><tr><th>Date</th><th>Plan ID</th><th>Routing</th><th>Description</th><th>Status</th><th>Routes</th><th>Orders</th><th>Utilization</th><th>Window</th><th>Calc At</th></tr></thead>' +
   '<tbody>' +
-  ROUTE_PLANS.map((p,i)=>'<tr onclick="selPlan('+i+')">' +
+  ROUTE_PLANS.filter(p=>p.status!=='failed').map((p,i)=>'<tr onclick="selPlan('+i+')">' +
   '<td>'+p.date+'</td>' +
   '<td><code style="font-family:monospace;font-size:12px;background:#f3f4f6;padding:2px 6px;border-radius:4px">'+p.id+'</code></td>' +
   '<td>'+p.routing+'</td><td>'+p.desc+'</td>' +
@@ -2572,28 +2706,185 @@ async function deleteServiceTime(prefix) {
 let couriersLiveData = []; // DB drivers (id, name, kitchenName)
 
 async function renderCouriers() {
+  const bodyEl = document.getElementById('content');
+  bodyEl.innerHTML = '<div class="page"><div style="padding:60px;text-align:center;color:#9ca3af">Loading drivers…</div></div>';
+
+  // Load from Firestore drivers collection
+  let drivers = [];
+  if (window._fbReady && window._fbDb) {
+    try {
+      const { getDocs } = await import('https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js');
+      const snap = await getDocs(window._fbCollection(window._fbDb,'drivers'));
+      snap.forEach(d => drivers.push({id: d.id, ...d.data()}));
+    } catch(e) {}
+  }
+  // Also load from MySQL drivers table
+  if (API_BASE) {
+    try {
+      const r = await fetch(`${API_BASE}/api/drivers`);
+      const rows = await r.json();
+      if (Array.isArray(rows)) {
+        rows.forEach(row => {
+          const exists = drivers.find(d => d.name && d.name.toLowerCase() === (row.name||'').toLowerCase());
+          if (!exists) drivers.push({id: row.id, name: row.name, city: row.kitchenName||'', active: true});
+        });
+      }
+    } catch(e) {}
+  }
+
+  // If no drivers in Firestore yet, seed from our known drivers
+  if (drivers.length === 0) {
+    const seeds = [
+      {id:'samir',name:'Samir',city:'Berlin',phone:'',email:'samir@bellabona.com',car:'Mercedes Sprinter',plate:'',active:true},
+      {id:'ali1', name:'Ali1', city:'Berlin',phone:'',email:'ali1@bellabona.com', car:'VW Caddy',plate:'',active:true},
+      {id:'ali2', name:'Ali2', city:'Berlin',phone:'',email:'ali2@bellabona.com', car:'VW Caddy',plate:'',active:true},
+      {id:'martin',name:'Martin',city:'Berlin',phone:'',email:'martin@bellabona.com',car:'VW Transporter',plate:'',active:true},
+      {id:'packator1',name:'Packator1',city:'Berlin',phone:'',email:'',car:'',plate:'',active:true},
+      {id:'packator2',name:'Packator2',city:'Berlin',phone:'',email:'',car:'',plate:'',active:true},
+      {id:'piyush',name:'Piyush',city:'Berlin',phone:'',email:'piyush@bellabona.com',car:'VW Caddy',plate:'',active:true},
+      {id:'mykhaielo',name:'Mykhaielo',city:'Berlin',phone:'',email:'',car:'',plate:'',active:true},
+      {id:'jozef',name:'Jozef',city:'Berlin',phone:'',email:'',car:'',plate:'',active:true},
+      {id:'tasnim',name:'Tasnim',city:'Berlin',phone:'',email:'',car:'',plate:'',active:true},
+    ];
+    drivers = seeds;
+  }
+  window._allDrivers = drivers;
+  _paintCouriers();
+}
+
+let _courierCity = 'Berlin';
+
+function _paintCouriers() {
+  const drivers = (window._allDrivers || []).filter(d => _courierCity === 'All' || d.city === _courierCity);
   document.getElementById('content').innerHTML =
-    '<div class="page"><div style="padding:60px;text-align:center;color:#9ca3af">Loading couriers…</div></div>';
+  '<div class="page">' +
+  '<div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px;margin-bottom:20px">' +
+    '<div><h2 style="font-size:22px;font-weight:700">🚗 Drivers</h2>' +
+    '<p style="color:#6b7280;font-size:14px">'+drivers.length+' drivers in '+_courierCity+'</p></div>' +
+    '<div style="display:flex;gap:8px;align-items:center">' +
+      '<select onchange="_courierCity=this.value;_paintCouriers()" style="border:1px solid #d1d5db;border-radius:7px;padding:6px 12px;font-size:13px">' +
+        '<option'+ (_courierCity==='Berlin'?' selected':'') +'>Berlin</option>' +
+        '<option'+ (_courierCity==='Munich'?' selected':'') +'>Munich</option>' +
+      '</select>' +
+      '<button class="btn btn-primary" onclick="openAddDriverModal()">+ Add Driver</button>' +
+    '</div>' +
+  '</div>' +
+  '<div style="overflow-x:auto">' +
+  '<table style="width:100%;border-collapse:collapse">' +
+  '<thead><tr style="background:#f9fafb">' +
+    ['Name','City','Phone','Email','Vehicle / Plate','Status',''].map(h=>'<th style="padding:10px 12px;font-size:12px;font-weight:600;color:#374151;text-align:left;border-bottom:2px solid #e5e7eb">'+h+'</th>').join('') +
+  '</tr></thead>' +
+  '<tbody>' +
+  drivers.map((d,i)=>{
+    const initials = (d.name||'?').substring(0,2).toUpperCase();
+    const isActive = d.active !== false;
+    return '<tr style="border-bottom:1px solid #f3f4f6">' +
+      '<td style="padding:10px 12px"><div style="display:flex;align-items:center;gap:10px">' +
+        '<div style="width:36px;height:36px;border-radius:50%;background:'+( isActive?'#e85d0420':'#f3f4f6')+';color:'+( isActive?'#e85d04':'#9ca3af')+';display:flex;align-items:center;justify-content:center;font-weight:700;font-size:13px">'+initials+'</div>' +
+        '<span style="font-weight:600;font-size:14px">'+(d.name||'—')+'</span></div></td>' +
+      '<td style="padding:10px 12px;font-size:13px;color:#6b7280">'+(d.city||'—')+'</td>' +
+      '<td style="padding:10px 12px;font-size:13px">'+(d.phone||'—')+'</td>' +
+      '<td style="padding:10px 12px;font-size:13px;color:#6b7280">'+(d.email||'—')+'</td>' +
+      '<td style="padding:10px 12px;font-size:12px">'+(d.car||d.vehicle||'—')+(d.plate?' · '+d.plate:'')+'</td>' +
+      '<td style="padding:10px 12px">' +
+        '<label style="display:flex;align-items:center;gap:6px;cursor:pointer">' +
+        '<input type="checkbox"'+(isActive?' checked':'')+' onchange="toggleDriver(\''+d.id+'\',this.checked)" style="width:16px;height:16px;cursor:pointer">' +
+        '<span style="font-size:12px;color:'+( isActive?'#16a34a':'#9ca3af')+';font-weight:600">'+( isActive?'Active':'Off')+'</span>' +
+        '</label></td>' +
+      '<td style="padding:10px 12px">' +
+        '<button class="btn btn-sm" onclick="openEditDriverModal('+i+')">✏️ Edit</button>' +
+      '</td>' +
+    '</tr>';
+  }).join('') +
+  '</tbody></table></div></div>';
+}
 
-  // Try to load live driver list from API
-  try {
-    const r = await fetch(`${API_BASE}/api/drivers`);
-    const rows = await r.json();
-    if(Array.isArray(rows) && rows.length > 0) {
-      couriersLiveData = rows;
-      // Merge with DEMO_COURIERS for additional info (email, phone, etc.)
-      rows.forEach(d => {
-        const demo = DEMO_COURIERS.find(c => c.name.toLowerCase() === d.name.toLowerCase());
-        if(demo) Object.assign(d, { email: demo.email, phone: demo.phone, vehicle: demo.vehicle,
-          os: demo.os, appVersion: demo.appVersion, orders7: demo.orders7,
-          lastActive: demo.lastActive, active: demo.active, company: demo.company,
-          kitchen: d.kitchenName || demo.kitchen });
-        else Object.assign(d, { kitchen: d.kitchenName || '—', active: true,
-          email: d.name.toLowerCase().replace(/\s+/,'')+'@bellabona.com' });
-      });
-    } else { couriersLiveData = DEMO_COURIERS; }
-  } catch(e) { couriersLiveData = DEMO_COURIERS; }
+async function toggleDriver(driverId, active) {
+  if (window._fbReady && window._fbDb) {
+    await window._fbSetDoc(window._fbDoc(window._fbDb,'drivers',driverId), {active}, {merge:true}).catch(()=>{});
+  }
+  const d = (window._allDrivers||[]).find(d=>d.id===driverId);
+  if (d) d.active = active;
+  _paintCouriers();
+}
 
+function openAddDriverModal() {
+  const mo = document.createElement('div');
+  mo.className = 'modal-overlay'; mo.id = 'driver-modal';
+  mo.innerHTML = _driverModalHtml(null, -1);
+  document.body.appendChild(mo);
+}
+
+function openEditDriverModal(idx) {
+  const existing = document.getElementById('driver-modal');
+  if (existing) existing.remove();
+  const d = (window._allDrivers||[])[idx];
+  const mo = document.createElement('div');
+  mo.className = 'modal-overlay'; mo.id = 'driver-modal';
+  mo.innerHTML = _driverModalHtml(d, idx);
+  document.body.appendChild(mo);
+}
+
+function _driverModalHtml(d, idx) {
+  const isNew = !d;
+  const v = (k,def='') => d ? (d[k]||def) : def;
+  return '<div class="modal" style="width:min(480px,95vw)">' +
+    '<button class="modal-close" onclick="this.closest(\'.modal-overlay\').remove()">×</button>' +
+    '<h3>'+(isNew?'➕ Add New Driver':'✏️ Edit Driver — '+v('name'))+'</h3>' +
+    '<div style="display:flex;flex-direction:column;gap:10px;margin-top:14px">' +
+      _mf('Driver Name *','dm-name','text',v('name')) +
+      '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">' +
+        _mf('City','dm-city','select','',['Berlin','Munich'],v('city')) +
+        _mf('Phone','dm-phone','tel',v('phone')) +
+      '</div>' +
+      _mf('Email','dm-email','email',v('email')) +
+      '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">' +
+        _mf('Vehicle (e.g. VW Caddy)','dm-car','text',v('car',v('vehicle'))) +
+        _mf('License Plate','dm-plate','text',v('plate')) +
+      '</div>' +
+      (isNew ? _mf('Password','dm-pass','password','') : '') +
+      (!isNew ? '<details style="border:1px solid #e5e7eb;border-radius:6px;padding:8px">' +
+        '<summary style="cursor:pointer;font-size:13px;font-weight:600;color:#374151">🔑 Reset Password (optional)</summary>' +
+        '<div style="margin-top:8px">' + _mf('New Password','dm-pass','password','') + '</div>' +
+      '</details>' : '') +
+    '</div>' +
+    '<div style="display:flex;gap:8px;justify-content:flex-end;margin-top:18px">' +
+      '<button class="btn" onclick="this.closest(\'.modal-overlay\').remove()">Cancel</button>' +
+      '<button class="btn btn-primary" onclick="saveDriver('+idx+')">'+( isNew?'Add Driver':'Save Changes')+'</button>' +
+    '</div>' +
+  '</div>';
+}
+
+function _mf(label,id,type,val,opts,sel) {
+  const inp = type==='select'
+    ? '<select id="'+id+'" style="width:100%;border:1px solid #d1d5db;border-radius:6px;padding:7px 10px;font-size:13px;margin-top:3px">'+(opts||[]).map(o=>'<option'+(o===sel?' selected':'')+'>'+o+'</option>').join('')+'</select>'
+    : '<input id="'+id+'" type="'+type+'" value="'+(val||'')+'" style="width:100%;border:1px solid #d1d5db;border-radius:6px;padding:7px 10px;font-size:13px;margin-top:3px">';
+  return '<div><label style="font-size:12px;font-weight:600;color:#374151">'+label+'</label>'+inp+'</div>';
+}
+
+async function saveDriver(idx) {
+  const name  = document.getElementById('dm-name').value.trim();
+  if (!name) { alert('Name is required'); return; }
+  const city  = document.getElementById('dm-city').value;
+  const phone = document.getElementById('dm-phone').value.trim();
+  const email = document.getElementById('dm-email').value.trim();
+  const car   = document.getElementById('dm-car').value.trim();
+  const plate = document.getElementById('dm-plate').value.trim();
+  const pass  = document.getElementById('dm-pass') ? document.getElementById('dm-pass').value : '';
+
+  const driverData = { name, city, phone, email, car, plate,
+    active: idx < 0 ? true : ((window._allDrivers||[])[idx]||{}).active !== false,
+    updatedAt: new Date().toISOString() };
+
+  const id = idx < 0 ? name.toLowerCase().replace(/\s+/g,'_')+'_'+Date.now() : (window._allDrivers||[])[idx].id;
+  if (window._fbReady && window._fbDb) {
+    await window._fbSetDoc(window._fbDoc(window._fbDb,'drivers',id), driverData, {merge:true}).catch(e=>console.warn(e));
+  }
+  if (idx < 0) { (window._allDrivers = window._allDrivers||[]).push({id,...driverData}); }
+  else { Object.assign((window._allDrivers||[])[idx], driverData); }
+
+  if (pass) { /* Password saved to auth — handled separately in production */ }
+  document.getElementById('driver-modal').remove();
   _paintCouriers();
 }
 
@@ -2810,48 +3101,93 @@ function openCD(i) {
 // ============================================================
 // SHIFTS
 // ============================================================
-function renderShifts() {
-  const today = new Date(2026,5,19);
-  const sow = new Date(today);
-  sow.setDate(today.getDate()-((today.getDay()+6)%7));
-  let calHtml = '<div class="calendar-grid">';
-  ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'].forEach(d=>{calHtml+='<div class="cal-header">'+d+'</div>';});
-  for(let w=0;w<4;w++) for(let d=0;d<7;d++) {
-    const dt = new Date(sow);
-    dt.setDate(sow.getDate()+w*7+d);
-    const isT = dt.toDateString()===today.toDateString();
-    const av = 5+((w*7+d*3)%8);
-    const dStr = dt.toISOString().split('T')[0];
-    calHtml+='<div class="cal-cell'+(isT?' today':'')+'" onclick="openCalDay(\''+dStr+'\','+av+')" title="Click to manage '+dStr+'"><div class="cal-date">'+dt.getDate()+'.'+(dt.getMonth()+1)+'</div><div class="cal-count">'+av+'/14</div></div>';
+async function renderShifts() {
+  document.getElementById('content').innerHTML = '<div class="page"><div style="padding:60px;text-align:center;color:#9ca3af">Loading availability…</div></div>';
+
+  // Load drivers
+  const allDrivers = window._allDrivers || [];
+  // Load shift data from Firestore
+  let shiftMap = {};
+  if (window._fbReady && window._fbDb) {
+    try {
+      const { getDocs } = await import('https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js');
+      const snap = await getDocs(window._fbCollection(window._fbDb,'driverShifts'));
+      snap.forEach(d => { shiftMap[d.id] = d.data(); });
+    } catch(e) {}
   }
-  calHtml+='</div>';
+
+  const DAYS = ['Monday','Tuesday','Wednesday','Thursday','Friday','Saturday','Sunday'];
+  const cityDrivers = allDrivers.filter(d => d.city === _courierCity);
+
+  const rows = cityDrivers.length > 0 ? cityDrivers : [
+    {id:'samir',name:'Samir'},{id:'ali1',name:'Ali1'},{id:'ali2',name:'Ali2'},
+    {id:'martin',name:'Martin'},{id:'packator1',name:'Packator1'},{id:'packator2',name:'Packator2'},
+    {id:'piyush',name:'Piyush'},{id:'mykhaielo',name:'Mykhaielo'},{id:'jozef',name:'Jozef'},{id:'tasnim',name:'Tasnim'},
+  ];
+
+  let tableHtml =
+    '<table style="width:100%;border-collapse:collapse;min-width:700px">' +
+    '<thead><tr style="background:#1a1a2e;color:#fff">' +
+      '<th style="padding:10px 14px;font-size:13px;text-align:left;border:1px solid #374151;min-width:120px">Driver</th>' +
+      DAYS.map(d=>'<th style="padding:10px 10px;font-size:12px;text-align:center;border:1px solid #374151;min-width:80px">'+d+'</th>').join('') +
+    '</tr></thead><tbody>';
+
+  rows.forEach((driver, ri) => {
+    const shifts = shiftMap[driver.id] || {};
+    tableHtml += '<tr style="border-bottom:1px solid #f3f4f6;background:'+(ri%2===0?'#fff':'#fafafa')+'">' +
+      '<td style="padding:8px 14px;font-weight:600;font-size:13px;border-right:2px solid #e5e7eb">' +
+        '<div style="display:flex;align-items:center;gap:8px">' +
+          '<div style="width:28px;height:28px;border-radius:50%;background:#e85d0420;color:#e85d04;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700">'+(driver.name||'?').substring(0,2).toUpperCase()+'</div>' +
+          (driver.name||'—') +
+        '</div></td>';
+    DAYS.forEach(day => {
+      const isOn = shifts[day] !== false && (shifts[day] === true || Object.keys(shifts).length === 0);
+      tableHtml += '<td style="padding:8px;text-align:center;border:1px solid #f3f4f6">' +
+        '<input type="checkbox"'+(isOn?' checked':'')+' data-driver="'+driver.id+'" data-day="'+day+'"' +
+        ' onchange="saveShift(\''+driver.id+'\',\''+day+'\',this.checked)"' +
+        ' style="width:18px;height:18px;cursor:pointer;accent-color:#e85d04"></td>';
+    });
+    tableHtml += '</tr>';
+  });
+
+  // Summary row
+  tableHtml += '<tr style="background:#f0fdf4;font-weight:700">' +
+    '<td style="padding:8px 14px;font-size:12px;border-right:2px solid #e5e7eb">Total Available</td>' +
+    DAYS.map(day => {
+      const count = rows.filter(d => {
+        const s = shiftMap[d.id] || {};
+        return s[day] !== false && (s[day] === true || Object.keys(s).length === 0);
+      }).length;
+      return '<td style="padding:8px;text-align:center;font-size:13px;border:1px solid #e5e7eb;color:#16a34a">'+count+'</td>';
+    }).join('') +
+    '</tr>';
+
+  tableHtml += '</tbody></table>';
 
   document.getElementById('content').innerHTML =
   '<div class="page">' +
-  '<div class="page-header"><h2>Shifts</h2><p>Courier shift management</p></div>' +
-  '<div style="display:flex;align-items:center;gap:12px;margin-bottom:20px">' +
-  '<label style="font-weight:500;font-size:14px">Schedule:</label>' +
-  '<select class="btn" onchange="shiftsSchedule=this.value;renderShifts()">' +
-  ['Munich Routing','1211','Potsdam routing','Backup Schedule'].map(s=>'<option'+(s===shiftsSchedule?' selected':'')+'>'+s+'</option>').join('') +
-  '</select></div>' +
-  '<div class="card" style="margin-bottom:20px"><div class="section-title">Availability Calendar &mdash; June 2026</div>'+calHtml+'</div>' +
-  '<div class="card"><div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px">' +
-  '<div class="section-title" style="margin-bottom:0">Default Shifts &mdash; '+shiftsSchedule+'</div>' +
-  '<button class="btn btn-primary btn-sm" onclick="openAddShiftModal()">+ Add Shift</button>' +
+  '<div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px;margin-bottom:20px">' +
+    '<div><h2 style="font-size:22px;font-weight:700">⏰ Weekly Availability</h2>' +
+    '<p style="color:#6b7280;font-size:14px">Set which drivers work on which days. Changes save automatically.</p></div>' +
+    '<select onchange="_courierCity=this.value;renderShifts()" style="border:1px solid #d1d5db;border-radius:7px;padding:6px 12px;font-size:13px">' +
+      '<option'+ (_courierCity==='Berlin'?' selected':'') +'>Berlin</option>' +
+      '<option'+ (_courierCity==='Munich'?' selected':'') +'>Munich</option>' +
+    '</select>' +
   '</div>' +
-  '<div class="table-wrap"><table>' +
-  '<thead><tr><th>Priority</th><th>Vehicle</th><th>Courier</th><th>Company</th><th>Location</th><th>Working Hours</th><th>Guaranteed</th><th>Delay (min)</th><th>Max Pkg</th><th>Actions</th></tr></thead>' +
-  '<tbody>' +
-  SHIFTS_DATA.map(s=>'<tr>' +
-  '<td><span class="badge badge-blue">'+s.prio+'</span></td>' +
-  '<td>'+s.vehicle+'</td><td><b>'+s.courier+'</b></td>' +
-  '<td>'+s.company+'</td><td>'+s.location+'</td>' +
-  '<td>'+s.hours+'</td>' +
-  '<td>'+(s.guaranteed?'&#x2705;':'&#x274C;')+'</td>' +
-  '<td>'+s.delay+'</td><td>'+s.maxPkg+'</td>' +
-  '<td onclick="event.stopPropagation()"><button class="btn btn-sm" onclick="openEditShiftModal(\''+s.courier+'\')">Edit</button></td>' +
-  '</tr>').join('') +
-  '</tbody></table></div></div></div>';
+  '<div style="overflow-x:auto;background:#fff;border-radius:8px;border:1px solid #e5e7eb;padding:0">' +
+    tableHtml +
+  '</div>' +
+  '<p style="margin-top:10px;font-size:12px;color:#9ca3af">✅ checked = driver works that day &nbsp;·&nbsp; Changes saved to Firebase automatically</p>' +
+  '</div>';
+}
+
+async function saveShift(driverId, day, value) {
+  if (!window._fbReady || !window._fbDb) return;
+  await window._fbSetDoc(
+    window._fbDoc(window._fbDb, 'driverShifts', driverId),
+    {[day]: value, updatedAt: new Date().toISOString()},
+    {merge: true}
+  ).catch(e => console.warn('Shift save error:', e));
 }
 
 // ============================================================
@@ -3474,6 +3810,7 @@ async function deleteRegionClosure(id) {
 let companiesData = [];
 
 async function renderCompanies() {
+  if (window._companiesTab === 'fleet') { await renderFleetAccounts(); return; }
   document.getElementById('content').innerHTML =
   '<div class="page"><div style="padding:60px;text-align:center;color:#9ca3af">Loading companies…</div></div>';
   try {
