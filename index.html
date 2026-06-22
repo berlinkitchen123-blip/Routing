@@ -4309,6 +4309,321 @@ async function deletePriceItem(itemId) {
 let analyticsFilter = {days:7, kitchen:'All'};
 let _analyticsChart = null;
 
+
+// ════════════════════════════════════════════════════════════
+// KPI RATES — editable, stored in Firestore kpiRates/Berlin
+// ════════════════════════════════════════════════════════════
+window._kpiRates = {
+  packatorBase:  101, packatorPerStop: 14, packatorMinStops: 3,
+  samirT4: 75, samirT5: 85, samirT6: 95, samirT7: 110, samirT8: 120, samirExtra: 15, samirPickup: 10,
+  aliT4: 110, aliT5: 115, aliT6: 125, aliExtra: 15,
+  mykhailoPerDay: 0,
+};
+
+async function loadKpiRates() {
+  if (!window._fbReady || !window._fbDb) return;
+  try {
+    const snap = await window._fbGetDoc(window._fbDoc(window._fbDb,'kpiRates','Berlin'));
+    if (snap.exists()) Object.assign(window._kpiRates, snap.data());
+  } catch(e) {}
+}
+
+async function openRateSettings() {
+  await loadKpiRates();
+  const R = window._kpiRates;
+  const existing = document.getElementById('rate-modal');
+  if (existing) existing.remove();
+  const mo = document.createElement('div');
+  mo.className = 'modal-overlay'; mo.id = 'rate-modal';
+  const rf = (label,id,val,step='1') =>
+    `<div><label style="font-size:11px;font-weight:600;color:#374151;display:block;margin-bottom:2px">${label}</label>` +
+    `<input id="rate-${id}" type="number" step="${step}" value="${val}" style="width:100%;border:1px solid #d1d5db;border-radius:5px;padding:5px 8px;font-size:13px"></div>`;
+  mo.innerHTML =
+    '<div class="modal" style="width:min(700px,95vw);max-height:90vh;overflow-y:auto">' +
+    '<button class="modal-close" onclick="this.closest(\'.modal-overlay\').remove()">×</button>' +
+    '<h3>⚙️ Edit Fleet Rates — Berlin</h3>' +
+    '<p style="font-size:13px;color:#6b7280;margin-bottom:16px">Changes save to Firebase and apply immediately to all future calculations.</p>' +
+
+    '<div style="border:1px solid #e5e7eb;border-radius:8px;padding:14px;margin-bottom:12px">' +
+    '<div style="font-size:13px;font-weight:700;color:#374151;margin-bottom:10px">🚐 Packator Fleet (NEW pricing Feb 2026+)</div>' +
+    '<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px">' +
+      rf('Base (3-4 stops €)','packatorBase',R.packatorBase) +
+      rf('Per extra stop (5+) €','packatorPerStop',R.packatorPerStop) +
+      rf('Min stops to charge','packatorMinStops',R.packatorMinStops) +
+    '</div>' +
+    '<div style="font-size:11px;color:#6b7280;margin-top:6px">Formula: ≤min stops = €0 · 3-4 = base · 5+ = base + (stops-4) × per_stop</div>' +
+    '</div>' +
+
+    '<div style="border:1px solid #e5e7eb;border-radius:8px;padding:14px;margin-bottom:12px">' +
+    '<div style="font-size:13px;font-weight:700;color:#374151;margin-bottom:10px">🧑‍✈️ Samir</div>' +
+    '<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px">' +
+      rf('≤4 stops €','samirT4',R.samirT4) + rf('5 stops €','samirT5',R.samirT5) +
+      rf('6 stops €','samirT6',R.samirT6) + rf('7 stops €','samirT7',R.samirT7) +
+    '</div>' +
+    '<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-top:8px">' +
+      rf('8 stops €','samirT8',R.samirT8) + rf('Extra per stop >8 €','samirExtra',R.samirExtra) +
+      rf('Per pickup stop €','samirPickup',R.samirPickup) +
+    '</div>' +
+    '</div>' +
+
+    '<div style="border:1px solid #e5e7eb;border-radius:8px;padding:14px;margin-bottom:12px">' +
+    '<div style="font-size:13px;font-weight:700;color:#374151;margin-bottom:10px">🏎️ Ali, Ali 2, Ali 3, Ali 4, Jozef (same rate)</div>' +
+    '<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px">' +
+      rf('≤4 stops €','aliT4',R.aliT4) + rf('5 stops €','aliT5',R.aliT5) +
+      rf('6 stops €','aliT6',R.aliT6) + rf('Extra per stop 7+ €','aliExtra',R.aliExtra) +
+    '</div>' +
+    '<div style="font-size:11px;color:#6b7280;margin-top:6px">7 stops = €'+(R.aliT6+(R.aliExtra||15))+' · 8 stops = €'+(R.aliT6+2*(R.aliExtra||15))+' etc.</div>' +
+    '</div>' +
+
+    '<div style="border:1px solid #e5e7eb;border-radius:8px;padding:14px;margin-bottom:16px">' +
+    '<div style="font-size:13px;font-weight:700;color:#374151;margin-bottom:10px">🚗 Mykhailo</div>' +
+    '<div style="display:grid;grid-template-columns:repeat(2,1fr);gap:8px">' +
+      rf('Direct daily rate (€)','mykhailoPerDay',R.mykhailoPerDay) +
+      '<div style="font-size:11px;color:#6b7280;padding-top:20px">Mykhailo rate is entered per-day in the "Mykhailo Rate" field</div>' +
+    '</div>' +
+    '</div>' +
+
+    '<div style="display:flex;gap:8px;justify-content:flex-end">' +
+    '<button class="btn" onclick="this.closest(\'.modal-overlay\').remove()">Cancel</button>' +
+    '<button class="btn btn-primary" onclick="saveKpiRates()">💾 Save Rates</button>' +
+    '</div></div>';
+  document.body.appendChild(mo);
+}
+
+async function saveKpiRates() {
+  const g = id => parseFloat(document.getElementById('rate-'+id)?.value)||0;
+  const rates = {
+    packatorBase: g('packatorBase'), packatorPerStop: g('packatorPerStop'), packatorMinStops: g('packatorMinStops'),
+    samirT4: g('samirT4'), samirT5: g('samirT5'), samirT6: g('samirT6'), samirT7: g('samirT7'),
+    samirT8: g('samirT8'), samirExtra: g('samirExtra'), samirPickup: g('samirPickup'),
+    aliT4: g('aliT4'), aliT5: g('aliT5'), aliT6: g('aliT6'), aliExtra: g('aliExtra'),
+    mykhailoPerDay: g('mykhailoPerDay'), updatedAt: new Date().toISOString()
+  };
+  if (window._fbReady && window._fbDb) {
+    await window._fbSetDoc(window._fbDoc(window._fbDb,'kpiRates','Berlin'), rates);
+  }
+  Object.assign(window._kpiRates, rates);
+  document.getElementById('rate-modal').remove();
+  _recalcKpi();
+  alert('✅ Rates saved! Calculations updated.');
+}
+
+// ════════════════════════════════════════════════════════════
+// WHATSAPP REPORT
+// ════════════════════════════════════════════════════════════
+async function openWhatsAppReport() {
+  if (!window._kpiCalc) { alert('Enter data and recalculate first'); return; }
+  const date = document.getElementById('kpi-date')?.value || new Date().toLocaleDateString('en-CA');
+  const c = window._kpiCalc;
+  const totalRev = _v('kpi-totalRevenue') + _v('kpi-serviceFee');
+  const meals = _v('kpi-meals');
+
+  // Load history for weekly/monthly
+  let records = [];
+  if (window._fbReady && window._fbDb) {
+    try {
+      const { getDocs } = await import('https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js');
+      const snap = await getDocs(window._fbCollection(window._fbDb,'logisticKPI'));
+      snap.forEach(d => { const data=d.data(); if(data.city==='Berlin') records.push(data); });
+      records.sort((a,b)=>a.date.localeCompare(b.date));
+    } catch(e) {}
+  }
+  const thisWeek = records.filter(r => {
+    const d = new Date(r.date), today = new Date(date);
+    const diff = (today-d)/(1000*60*60*24);
+    return diff >= 0 && diff < 7;
+  });
+  const thisMonth = records.filter(r => r.date && r.date.substring(0,7) === date.substring(0,7));
+
+  const fmt = n => '€'+(n||0).toFixed(0);
+  const pct = (a,b) => b>0?(a/b*100).toFixed(1)+'%':'—';
+
+  const dayMsg =
+`📊 *BellaBona Berlin — Daily Report*
+📅 *${date}*
+
+💰 *Revenue:* ${fmt(totalRev)}
+🍽️ Meals: ${meals} | Catering: ${fmt(_v('kpi-catering'))} | Add-ons: ${fmt(_v('kpi-addOns'))}
+🚗 *Logistic Cost:* ${fmt(c.totalLogCost)}
+✅ *Net Profit:* ${fmt(c.netProfit)}
+📊 *Log Cost %:* ${c.logPct}%
+
+👥 *Driver Summary:*
+• Samir: ${fmt(c.samirCost)} (${_v('kpi-samirStops')} stops)
+• Ali: ${fmt(c.aliCost)} | Jozef: ${fmt(c.jozefCost)}
+• Packator Fleet: ${fmt(c.packatorCost)}
+• Mykhailo: ${fmt(c.mykhailoCost)}
+• Internal: ${fmt(c.internalCost)}
+
+📦 Stops: ${Math.round(c.totalStops)} | Cost/Stop: ${fmt(c.cpStop)} | Meals/Stop: ${c.mealsPerStop}
+📱 _BellaBona LMM_`;
+
+  const weekMsg = thisWeek.length > 0 ? `📊 *Weekly Summary (${thisWeek.length} days)*
+💰 Revenue: ${fmt(thisWeek.reduce((s,r)=>s+(r.totalRevenue||0)+(r.serviceFee||0),0))}
+🚗 Log Cost: ${fmt(thisWeek.reduce((s,r)=>s+(r.totalLogCost||0),0))}
+✅ Profit: ${fmt(thisWeek.reduce((s,r)=>s+(r.netProfit||0),0))}
+📊 Avg Log%: ${pct(thisWeek.reduce((s,r)=>s+(r.totalLogCost||0),0), thisWeek.reduce((s,r)=>s+(r.totalRevenue||0)+(r.serviceFee||0),0))}` : '(no weekly data yet)';
+
+  const monthMsg = thisMonth.length > 0 ? `📅 *Monthly Summary (${thisMonth.length} days)*
+💰 Revenue: ${fmt(thisMonth.reduce((s,r)=>s+(r.totalRevenue||0)+(r.serviceFee||0),0))}
+🚗 Log Cost: ${fmt(thisMonth.reduce((s,r)=>s+(r.totalLogCost||0),0))}
+✅ Profit: ${fmt(thisMonth.reduce((s,r)=>s+(r.netProfit||0),0))}
+📊 Log%: ${pct(thisMonth.reduce((s,r)=>s+(r.totalLogCost||0),0), thisMonth.reduce((s,r)=>s+(r.totalRevenue||0)+(r.serviceFee||0),0))}` : '(no monthly data yet)';
+
+  const mo = document.createElement('div');
+  mo.className = 'modal-overlay'; mo.id = 'wa-modal';
+  mo.innerHTML =
+    '<div class="modal" style="width:min(700px,95vw);max-height:90vh;overflow-y:auto">' +
+    '<button class="modal-close" onclick="this.closest(\'.modal-overlay\').remove()">×</button>' +
+    '<h3>💬 WhatsApp Reports</h3>' +
+    '<p style="font-size:13px;color:#6b7280;margin-bottom:16px">Click Copy then paste into WhatsApp.</p>' +
+    _waCard('📊 Daily Report', dayMsg) +
+    _waCard('📅 Weekly Summary', weekMsg) +
+    _waCard('📆 Monthly Summary', monthMsg) +
+    '</div>';
+  document.body.appendChild(mo);
+}
+
+function _waCard(title, msg) {
+  const id = 'wa-' + Math.random().toString(36).substr(2,6);
+  const safe = msg.replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  return '<div style="background:#f9fafb;border:1px solid #e5e7eb;border-radius:8px;padding:14px;margin-bottom:12px">' +
+    '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">' +
+      '<span style="font-weight:700;font-size:13px">'+title+'</span>' +
+      '<button onclick="navigator.clipboard.writeText(document.getElementById(\''+id+'\').innerText).then(()=>this.textContent=\'✅ Copied!\').catch(()=>alert(\'Copy failed\'))" style="background:#25d366;color:#fff;border:none;border-radius:5px;padding:4px 10px;cursor:pointer;font-size:12px">📋 Copy</button>' +
+    '</div>' +
+    '<pre id="'+id+'" style="white-space:pre-wrap;font-family:monospace;font-size:11px;background:#fff;border:1px solid #e5e7eb;border-radius:5px;padding:10px;margin:0;max-height:150px;overflow-y:auto">'+safe+'</pre>' +
+  '</div>';
+}
+
+// ════════════════════════════════════════════════════════════
+// PARTNER PDFs
+// ════════════════════════════════════════════════════════════
+async function openPdfReports() {
+  const date = document.getElementById('kpi-date')?.value || new Date().toLocaleDateString('en-CA');
+  const c = window._kpiCalc || {};
+
+  // Load monthly data
+  let records = [];
+  if (window._fbReady && window._fbDb) {
+    try {
+      const { getDocs } = await import('https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js');
+      const snap = await getDocs(window._fbCollection(window._fbDb,'logisticKPI'));
+      snap.forEach(d => { const data=d.data(); if(data.city==='Berlin') records.push(data); });
+      records.sort((a,b)=>a.date.localeCompare(b.date));
+    } catch(e) {}
+  }
+  const month = date.substring(0,7);
+  const monthRecords = records.filter(r => r.date && r.date.substring(0,7) === month);
+
+  const partners = [
+    { name: 'Ali & Jozef', key: 'ali', color: '#2563eb',
+      daily: c.aliCost||0, monthly: monthRecords.reduce((s,r)=>s+(r.aliCost||0),0),
+      stops: _v('kpi-aliStops')+_v('kpi-ali2stops')+_v('kpi-ali3stops')+_v('kpi-ali4stops')+_v('kpi-jozefStops'),
+      monthlyStops: monthRecords.reduce((s,r)=>s+(_v('kpi-aliStops')||0),0),
+      breakdown: `Ali: €${(window._kpiCalc?.aliCost||0).toFixed(0)} | Jozef: €${(window._kpiCalc?.jozefCost||0).toFixed(0)}` },
+    { name: 'Samir', key: 'samir', color: '#d97706',
+      daily: c.samirCost||0, monthly: monthRecords.reduce((s,r)=>s+(r.samirCost||0),0),
+      stops: _v('kpi-samirStops'), monthlyStops: monthRecords.reduce((s,r)=>s+(r.samirStops||0),0),
+      breakdown: `Stops: ${_v('kpi-samirStops')} · Pickups: ${_v('kpi-samirPickup')}` },
+    { name: 'Packator Fleet', key: 'packator', color: '#374151',
+      daily: c.packatorCost||0, monthly: monthRecords.reduce((s,r)=>s+(r.packatorCost||0),0),
+      stops: _v('kpi-p1stops')+_v('kpi-p2stops')+_v('kpi-p3stops')+_v('kpi-p4stops')+_v('kpi-p5stops')+_v('kpi-p6stops'),
+      monthlyStops: monthRecords.reduce((s,r)=>s+(r.packatorStops||0),0),
+      breakdown: `P1-4 + Stadtbote 1-2` },
+    { name: 'Mykhailo', key: 'mykhailo', color: '#0891b2',
+      daily: c.mykhailoCost||0, monthly: monthRecords.reduce((s,r)=>s+(r.mykhailoCost||0),0),
+      stops: _v('kpi-mykhailoStops'), monthlyStops: monthRecords.reduce((s,r)=>s+(r.mykhailoStops||0),0),
+      breakdown: `Direct daily rate` },
+  ];
+
+  const mo = document.createElement('div');
+  mo.className = 'modal-overlay'; mo.id = 'pdf-modal';
+  mo.innerHTML =
+    '<div class="modal" style="width:min(800px,95vw);max-height:90vh;overflow-y:auto">' +
+    '<button class="modal-close" onclick="this.closest(\'.modal-overlay\').remove()">×</button>' +
+    '<h3>📄 Partner Payment Reports — '+date+'</h3>' +
+    '<p style="font-size:13px;color:#6b7280;margin-bottom:16px">Click "Print PDF" to generate a printable report for each partner. Use browser print → Save as PDF.</p>' +
+    '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(340px,1fr));gap:12px">' +
+    partners.map(p =>
+      '<div style="border:2px solid '+p.color+';border-radius:10px;overflow:hidden">' +
+        '<div style="background:'+p.color+';color:#fff;padding:12px 16px;display:flex;justify-content:space-between;align-items:center">' +
+          '<div style="font-weight:700;font-size:15px">'+p.name+'</div>' +
+          '<button onclick="printPartnerPdf(\''+p.name+'\',\''+date+'\')" style="background:#fff;color:'+p.color+';border:none;border-radius:5px;padding:4px 10px;cursor:pointer;font-size:12px;font-weight:700">🖨️ Print PDF</button>' +
+        '</div>' +
+        '<div style="padding:14px;background:#fff">' +
+          '<table style="width:100%;font-size:13px;border-collapse:collapse">' +
+            '<tr><td style="padding:4px 0;color:#6b7280">Today ('+date+')</td><td style="text-align:right;font-weight:700;color:'+p.color+'">€'+p.daily.toFixed(2)+'</td></tr>' +
+            '<tr><td style="padding:4px 0;color:#6b7280">Month to Date ('+month+')</td><td style="text-align:right;font-weight:700">€'+p.monthly.toFixed(2)+'</td></tr>' +
+            '<tr><td style="padding:4px 0;color:#6b7280">Stops Today</td><td style="text-align:right">'+Math.round(p.stops)+'</td></tr>' +
+            '<tr><td style="padding:4px 0;color:#6b7280;font-size:11px">'+p.breakdown+'</td><td></td></tr>' +
+          '</table>' +
+        '</div>' +
+      '</div>'
+    ).join('') +
+    '</div>' +
+    '<div style="margin-top:16px;text-align:center">' +
+      '<button onclick="printAllPartnerPdfs(\''+date+'\')" style="background:#1a1a2e;color:#fff;border:none;border-radius:7px;padding:10px 24px;cursor:pointer;font-size:14px;font-weight:600">🖨️ Print ALL Partner Reports</button>' +
+    '</div>' +
+    '</div>';
+  document.body.appendChild(mo);
+}
+
+function printPartnerPdf(partnerName, date) {
+  const c = window._kpiCalc || {};
+  const totalRev = _v('kpi-totalRevenue') + _v('kpi-serviceFee');
+
+  const partnerData = {
+    'Ali & Jozef': { daily: c.aliCost||0, desc: `Ali: €${(c.aliCost||0).toFixed(0)} | Jozef: €${(c.jozefCost||0).toFixed(0)}`, stops: _v('kpi-aliStops')+_v('kpi-ali2stops') },
+    'Samir': { daily: c.samirCost||0, desc: `${_v('kpi-samirStops')} stops + ${_v('kpi-samirPickup')} pickups × €${(window._kpiRates||{}).samirPickup||10}`, stops: _v('kpi-samirStops') },
+    'Packator Fleet': { daily: c.packatorCost||0, desc: `Service: €${(c.packatorServiceCost||0).toFixed(0)} + Dispatch: €${_v('kpi-packatorDispatch').toFixed(0)}`, stops: _v('kpi-p1stops')+_v('kpi-p2stops')+_v('kpi-p3stops') },
+    'Mykhailo': { daily: c.mykhailoCost||0, desc: `Direct rate: €${_v('kpi-mykhailoRate')}`, stops: _v('kpi-mykhailoStops') },
+  };
+  const d = partnerData[partnerName] || { daily: 0, desc: '', stops: 0 };
+
+  const win = window.open('', '_blank', 'width=700,height=900');
+  win.document.write(`<!DOCTYPE html><html><head><title>${partnerName} — ${date}</title>
+<style>body{font-family:Arial,sans-serif;padding:40px;color:#111;max-width:600px;margin:0 auto}
+h1{font-size:22px;border-bottom:3px solid #1a1a2e;padding-bottom:10px}
+.logo{font-size:20px;font-weight:900;color:#e85d04;margin-bottom:4px}
+table{width:100%;border-collapse:collapse;margin:20px 0}
+td{padding:10px 12px;border-bottom:1px solid #e5e7eb;font-size:14px}
+.total{font-size:20px;font-weight:700;color:#e85d04;text-align:right}
+.footer{margin-top:40px;font-size:11px;color:#9ca3af;border-top:1px solid #e5e7eb;padding-top:10px}
+@media print{button{display:none}}</style></head><body>
+<div class="logo">BellaBona</div>
+<div style="font-size:12px;color:#6b7280;margin-bottom:20px">Last Mile Management System</div>
+<h1>💶 Payment Report — ${partnerName}</h1>
+<table>
+  <tr><td style="color:#6b7280">Date</td><td><strong>${date}</strong></td></tr>
+  <tr><td style="color:#6b7280">Partner</td><td><strong>${partnerName}</strong></td></tr>
+  <tr><td style="color:#6b7280">Total Stops</td><td>${Math.round(d.stops)}</td></tr>
+  <tr><td style="color:#6b7280">Breakdown</td><td style="font-size:12px">${d.desc}</td></tr>
+  <tr><td colspan="2" style="height:10px"></td></tr>
+  <tr><td style="font-size:16px;font-weight:700">Daily Payable</td><td class="total">€${d.daily.toFixed(2)}</td></tr>
+</table>
+<div style="background:#f9fafb;border-radius:8px;padding:14px;font-size:12px;color:#6b7280">
+  <strong>Pricing:</strong> ${
+    partnerName==='Samir' ? `≤4:€${(window._kpiRates||{}).samirT4||75} · 5:€${(window._kpiRates||{}).samirT5||85} · 6:€${(window._kpiRates||{}).samirT6||95} · 7:€${(window._kpiRates||{}).samirT7||110} · 8:€${(window._kpiRates||{}).samirT8||120} · extra:€${(window._kpiRates||{}).samirExtra||15}/stop` :
+    partnerName==='Ali & Jozef' ? `1-4:€${(window._kpiRates||{}).aliT4||110} · 5:€${(window._kpiRates||{}).aliT5||115} · 6:€${(window._kpiRates||{}).aliT6||125} · 7+:€${(window._kpiRates||{}).aliT6||125}+${(window._kpiRates||{}).aliExtra||15}/stop` :
+    partnerName==='Packator Fleet' ? `3-4 stops: €${(window._kpiRates||{}).packatorBase||101} · 5+: €${(window._kpiRates||{}).packatorBase||101}+${(window._kpiRates||{}).packatorPerStop||14}/stop` :
+    'Direct daily rate'
+  }
+</div>
+<div style="margin-top:20px;text-align:right">
+  <button onclick="window.print()" style="background:#1a1a2e;color:#fff;border:none;border-radius:6px;padding:10px 24px;cursor:pointer;font-size:14px">🖨️ Save as PDF</button>
+</div>
+<div class="footer">Generated by BellaBona LMM · ${new Date().toLocaleString('de-DE')} · Confidential</div>
+</body></html>`);
+  win.document.close();
+}
+
+function printAllPartnerPdfs(date) {
+  ['Ali & Jozef','Samir','Packator Fleet','Mykhailo'].forEach((p,i) => {
+    setTimeout(() => printPartnerPdf(p, date), i * 500);
+  });
+}
+
 async function renderAnalytics() {
   document.getElementById('content').innerHTML =
   '<div class="page">' +
@@ -4319,6 +4634,9 @@ async function renderAnalytics() {
       '<input type="date" id="kpi-date" value="'+new Date().toLocaleDateString('en-CA')+'" style="border:1px solid #d1d5db;border-radius:7px;padding:6px 12px;font-size:13px" onchange="loadKpiDay(this.value)">' +
       '<button class="btn btn-primary" onclick="saveKpiDay()">💾 Save Daily Record</button>' +
       '<button class="btn" style="background:#059669;color:#fff;border-color:#059669" onclick="showKpiHistory()">📈 View History</button>' +
+      '<button class="btn" style="background:#25d366;color:#fff;border-color:#25d366" onclick="openWhatsAppReport()">💬 WhatsApp Report</button>' +
+      '<button class="btn" style="background:#dc2626;color:#fff;border-color:#dc2626" onclick="openPdfReports()">📄 Partner PDFs</button>' +
+      '<button class="btn" style="background:#6366f1;color:#fff;border-color:#6366f1" onclick="openRateSettings()">⚙️ Edit Rates</button>' +
     '</div>' +
   '</div>' +
 
@@ -4410,7 +4728,8 @@ async function renderAnalytics() {
   '</div>';
 
   // Attach live calculation listeners
-  setTimeout(() => {
+  setTimeout(async () => {
+    await loadKpiRates();
     document.querySelectorAll('[id^="kpi-"]').forEach(el => {
       if (el.tagName === 'INPUT') el.addEventListener('input', _recalcKpi);
     });
@@ -4440,29 +4759,33 @@ function _kpiCard(label, id, val, color) {
 function _v(id) { return parseFloat(document.getElementById(id)?.value)||0; }
 
 function _recalcKpi() {
-  // ── EXACT formulas from usekpiCalculations.ts ──
+  // ── EXACT formulas — uses editable rates from window._kpiRates ──
+  const R = window._kpiRates || {};
 
-  // Samir: tiered + pickups×€10
+  // Samir: tiered + pickups×rate
   function _samirCost(stops, pickups) {
     if (stops <= 0) return 0;
-    let base = stops<=4?75:stops===5?85:stops===6?95:stops===7?110:stops===8?120:120+(stops-8)*15;
-    return base + pickups * 10;
+    const t4=R.samirT4||75, t5=R.samirT5||85, t6=R.samirT6||95, t7=R.samirT7||110, t8=R.samirT8||120, ex=R.samirExtra||15;
+    let base = stops<=4?t4:stops===5?t5:stops===6?t6:stops===7?t7:stops===8?t8:t8+(stops-8)*ex;
+    return base + pickups * (R.samirPickup||10);
   }
 
-  // Ali, Ali2, Ali3, Ali4, Jozef — all use same NEW standard rate (Feb 2026+)
+  // Ali, Ali2, Ali3, Ali4, Jozef
   function _stdRate(stops) {
     if (stops <= 0) return 0;
-    if (stops <= 4) return 110;
-    if (stops === 5) return 115;
-    if (stops === 6) return 125;
-    return 125 + (stops - 6) * 15; // 7→140, 8→155, etc.
+    const t4=R.aliT4||110, t5=R.aliT5||115, t6=R.aliT6||125, ex=R.aliExtra||15;
+    if (stops <= 4) return t4;
+    if (stops === 5) return t5;
+    if (stops === 6) return t6;
+    return t6 + (stops - 6) * ex;
   }
 
-  // Packator NEW pricing (Feb 2026+): 3-4:€101, 5+: 101+(n-4)×14
+  // Packator
   function _packatorRate(stops) {
-    if (stops <= 2) return 0;
-    if (stops <= 4) return 101;
-    return 101 + (stops - 4) * 14;
+    const minStops = R.packatorMinStops||3, base=R.packatorBase||101, perStop=R.packatorPerStop||14;
+    if (stops <= minStops-1) return 0;
+    if (stops <= 4) return base;
+    return base + (stops - 4) * perStop;
   }
 
   // Per-packator costs
