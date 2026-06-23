@@ -1240,6 +1240,34 @@ async function loadFromWeeklyTemplate(bodyEl, skipSavedPlan=false) {
       }
     });
 
+    // ── Inject fixed weekly stops (always present, no JSON needed) ──
+    const fixedStops = _weeklyTemplate.fixedStops || [];
+    fixedStops.forEach(fixed => {
+      const fixedId = 'fixed_' + fixed.company.replace(/[^a-zA-Z0-9]/g,'_');
+      // Check if already matched from JSON
+      const alreadyIn = newStops.find(s => s.company.toLowerCase().replace(/[^a-z0-9]/g,'').includes(
+        fixed.company.toLowerCase().replace(/[^a-z0-9]/g,'').substring(0,8)
+      ));
+      if (!alreadyIn) {
+        newStops.push({
+          branchId:     fixedId,
+          company:      fixed.company,
+          templateName: fixed.company,
+          address:      fixed.address || '',
+          postCode:     fixed.postCode || '',
+          city:         fixed.city || 'Berlin',
+          deliveryInfo: fixed.note || '',
+          orderCount:   1,
+          hasOrder:     true,  // Fixed stops always run
+          isFixed:      true,
+          isManual:     true,
+        });
+        // Assign to Unassigned by default (user can drag to driver)
+        _planAssign[fixedId] = 'Unassigned';
+        if (fixed.note) _planNotes[fixedId] = fixed.note;
+      }
+    });
+
     _planStops = newStops;
     _planDrivers = _weeklyTemplate.drivers || [...new Set(Object.values(_planAssign))].filter(d=>d!=='Unassigned').sort();
 
