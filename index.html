@@ -3315,11 +3315,97 @@ function _paintCouriers() {
         '<span style="font-size:12px;color:'+( isActive?'#16a34a':'#9ca3af')+';font-weight:600">'+( isActive?'Active':'Off')+'</span>' +
         '</label></td>' +
       '<td style="padding:10px 12px">' +
-        '<button class="btn btn-sm" onclick="openEditDriverModal('+i+')">✏️ Edit</button>' +
+        '<button class="btn btn-sm" onclick="openEditDriverModal('+i+')">✏️ Edit</button> ' +
+        '<button class="btn btn-sm" style="background:'+(d.hasPassword?'#16a34a':'#dc2626')+';color:#fff;border-color:'+(d.hasPassword?'#16a34a':'#dc2626')+'" onclick="openPasswordModal(\''+d.id+'\',\''+d.name+'\')" title="'+(d.hasPassword?'Change Password':'Set Password')+'">🔑 '+(d.hasPassword?'Password':'Set PW')+'</button>' +
       '</td>' +
     '</tr>';
   }).join('') +
   '</tbody></table></div></div>';
+}
+
+function openPasswordModal(driverId, driverName) {
+  const existing = document.getElementById('pw-modal');
+  if (existing) existing.remove();
+  const d = (window._allDrivers||[]).find(d=>d.id===driverId)||{};
+  const hasPw = d.hasPassword || false;
+  const mo = document.createElement('div');
+  mo.className='modal-overlay'; mo.id='pw-modal';
+  mo.innerHTML =
+    '<div class="modal" style="width:min(400px,95vw)">' +
+    '<button class="modal-close" onclick="this.closest(\'.modal-overlay\').remove()">×</button>' +
+    '<h3>🔑 '+(hasPw?'Change':'Set')+' Password — '+driverName+'</h3>' +
+    '<p style="font-size:13px;color:#6b7280;margin-bottom:16px">Driver uses their <b>name</b> + this password to log in to the Drive app.</p>' +
+    '<div style="display:flex;flex-direction:column;gap:10px">' +
+      (hasPw?'<div><label style="font-size:12px;font-weight:600;color:#374151">Current Password</label>' +
+        '<input id="pw-current" type="password" placeholder="Enter current password" style="width:100%;border:1px solid #d1d5db;border-radius:6px;padding:8px 10px;font-size:14px;margin-top:3px"></div>':'') +
+      '<div><label style="font-size:12px;font-weight:600;color:#374151">New Password *</label>' +
+        '<input id="pw-new" type="password" placeholder="Min 6 characters" style="width:100%;border:1px solid #d1d5db;border-radius:6px;padding:8px 10px;font-size:14px;margin-top:3px"></div>' +
+      '<div><label style="font-size:12px;font-weight:600;color:#374151">Confirm Password *</label>' +
+        '<input id="pw-confirm" type="password" placeholder="Repeat password" style="width:100%;border:1px solid #d1d5db;border-radius:6px;padding:8px 10px;font-size:14px;margin-top:3px"></div>' +
+    '</div>' +
+    '<div id="pw-error" style="color:#dc2626;font-size:12px;margin-top:8px;display:none"></div>' +
+    '<div style="display:flex;gap:8px;justify-content:flex-end;margin-top:18px">' +
+      '<button class="btn" onclick="this.closest(\'.modal-overlay\').remove()">Cancel</button>' +
+      (hasPw?'<button class="btn" style="color:#dc2626;border-color:#dc2626" onclick="clearDriverPassword(\''+driverId+'\',\''+driverName+'\')">🗑 Remove Password</button>':'') +
+      '<button class="btn btn-primary" onclick="saveDriverPassword(\''+driverId+'\',\''+driverName+'\','+hasPw+')">💾 '+(hasPw?'Update':'Set')+' Password</button>' +
+    '</div></div>';
+  document.body.appendChild(mo);
+  setTimeout(()=>document.getElementById('pw-new')?.focus(),100);
+}
+
+async function saveDriverPassword(driverId, driverName, hasPw) {
+  const errEl = document.getElementById('pw-error');
+  const newPw = document.getElementById('pw-new')?.value || '';
+  const confirm = document.getElementById('pw-confirm')?.value || '';
+
+  if (newPw.length < 6) {
+    errEl.textContent = 'Password must be at least 6 characters.'; errEl.style.display='block'; return;
+  }
+  if (newPw !== confirm) {
+    errEl.textContent = 'Passwords do not match.'; errEl.style.display='block'; return;
+  }
+
+  // If changing, verify current password
+  if (hasPw) {
+    const currentPw = document.getElementById('pw-current')?.value || '';
+    const d = (window._allDrivers||[]).find(d=>d.id===driverId)||{};
+    if (d.passwordHash && d.passwordHash !== btoa(currentPw)) {
+      errEl.textContent = 'Current password is incorrect.'; errEl.style.display='block'; return;
+    }
+  }
+
+  // Store password hash in Firestore
+  const passwordHash = btoa(newPw); // basic encoding — upgrade to proper hash for production
+  if (window._fbReady && window._fbDb) {
+    await window._fbSetDoc(window._fbDoc(window._fbDb,'drivers',driverId), {
+      passwordHash, hasPassword: true, driverId: driverName, updatedAt: new Date().toISOString()
+    }, {merge:true});
+  }
+  // Update local
+  const d = (window._allDrivers||[]).find(d=>d.id===driverId);
+  if (d) { d.hasPassword=true; d.passwordHash=passwordHash; }
+
+  document.getElementById('pw-modal').remove();
+  _paintCouriers();
+  // Show success
+  const info = document.createElement('div');
+  info.style.cssText='position:fixed;bottom:20px;right:20px;background:#16a34a;color:#fff;padding:12px 20px;border-radius:8px;font-size:13px;font-weight:600;z-index:9999;box-shadow:0 4px 12px rgba(0,0,0,0.2)';
+  info.textContent='✅ Password '+(hasPw?'updated':'set')+' for '+driverName;
+  document.body.appendChild(info);
+  setTimeout(()=>info.remove(),3000);
+}
+
+async function clearDriverPassword(driverId, driverName) {
+  if (!confirm('Remove password for '+driverName+'? They will not be able to log in until a new password is set.')) return;
+  if (window._fbReady && window._fbDb) {
+    await window._fbSetDoc(window._fbDoc(window._fbDb,'drivers',driverId), {
+      passwordHash: '', hasPassword: false, updatedAt: new Date().toISOString()
+    }, {merge:true});
+  }
+  const d = (window._allDrivers||[]).find(d=>d.id===driverId);
+  if (d) { d.hasPassword=false; d.passwordHash=''; }
+  document.getElementById('pw-modal').remove();
+  _paintCouriers();
 }
 
 async function toggleDriver(driverId, active) {
