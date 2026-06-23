@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>BellaBona Drive</title>
+<title>Drive</title>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns=%27http://www.w3.org/2000/svg%27 viewBox=%270 0 100 100%27><text y=%27.9em%27 font-size=%2790%27>🚚</text></svg>">
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
@@ -185,11 +185,11 @@ tbody tr{transition:background 0.1s;cursor:pointer}
 
 <div id="sidebar">
   <div class="sidebar-header">
-    <div class="sidebar-logo">BellaBona Drive</div>
-    <div class="sidebar-subtitle">Delivery Management</div>
+    <div class="sidebar-logo">Drive</div>
+    <div class="sidebar-subtitle">Logistics Platform</div>
   </div>
   <nav class="sidebar-nav" id="sidebar-nav"></nav>
-  <div class="sidebar-footer">v2.1.0 &bull; Bella Bona GmbH</div>
+  <div class="sidebar-footer">v2.1.0</div>
 </div>
 
 <div id="main">
@@ -264,18 +264,18 @@ const DEMO_ORDERS = [
 ];
 
 const DEMO_COURIERS = [
-  {name:'Adrian',email:'adrian@bellabona.com',phone:'+49 151 1111 0001',kitchen:'Munich',vehicle:'Caddy',os:'Android 12',appVersion:'3.4.1',orders7:18,lastActive:'2026-06-19 12:30',active:true,company:'Bella Bona Munich'},
+  {name:'Adrian',email:'adrian@bellabona.com',phone:'+49 151 1111 0001',kitchen:'Munich',vehicle:'Caddy',os:'Android 12',appVersion:'3.4.1',orders7:18,lastActive:'2026-06-19 12:30',active:true,company:'Drive Munich'},
   {name:'Bouchi1',email:'bouchi1@bellabona.com',phone:'+49 151 1111 0002',kitchen:'Munich',vehicle:'Caddy',os:'iOS 17',appVersion:'3.4.2',orders7:62,lastActive:'2026-06-19 13:05',active:true,company:'Bouchi'},
-  {name:'Ivan',email:'ivan@bellabona.com',phone:'+49 151 1111 0003',kitchen:'Munich',vehicle:'Caddy',os:'Android 13',appVersion:'3.4.1',orders7:51,lastActive:'2026-06-19 12:45',active:true,company:'Bella Bona Munich'},
+  {name:'Ivan',email:'ivan@bellabona.com',phone:'+49 151 1111 0003',kitchen:'Munich',vehicle:'Caddy',os:'Android 13',appVersion:'3.4.1',orders7:51,lastActive:'2026-06-19 12:45',active:true,company:'Drive Munich'},
   {name:'Kurt',email:'kurt@bellabona.com',phone:'+49 151 1111 0004',kitchen:'Munich',vehicle:'Caddy',os:'Android 12',appVersion:'3.4.0',orders7:55,lastActive:'2026-06-19 13:10',active:true,company:'Kurt'},
   {name:'Kurt1',email:'kurt1@bellabona.com',phone:'+49 151 1111 0005',kitchen:'Munich',vehicle:'Caddy',os:'Android 13',appVersion:'3.4.1',orders7:48,lastActive:'2026-06-19 12:58',active:true,company:'Kurt'},
   {name:'Kurt2',email:'kurt2@bellabona.com',phone:'+49 151 1111 0006',kitchen:'Munich',vehicle:'Truck',os:'iOS 16',appVersion:'3.3.9',orders7:44,lastActive:'2026-06-19 13:20',active:true,company:'Kurt'},
   {name:'Kurt3',email:'kurt3@bellabona.com',phone:'+49 151 1111 0007',kitchen:'Munich',vehicle:'Caddy',os:'Android 12',appVersion:'3.4.1',orders7:58,lastActive:'2026-06-19 13:15',active:true,company:'Kurt'},
   {name:'Kurt4',email:'kurt4@bellabona.com',phone:'+49 151 1111 0008',kitchen:'Munich',vehicle:'Caddy',os:'Android 14',appVersion:'3.4.2',orders7:72,lastActive:'2026-06-19 13:45',active:false,company:'Kurt'},
   {name:'Kurt5',email:'kurt5@bellabona.com',phone:'+49 151 1111 0009',kitchen:'Munich',vehicle:'Caddy',os:'iOS 17',appVersion:'3.4.2',orders7:80,lastActive:'2026-06-19 14:40',active:true,company:'Kurt'},
-  {name:'Munich02',email:'munich02@bellabona.com',phone:'+49 151 1111 0010',kitchen:'Munich',vehicle:'Caddy',os:'Android 11',appVersion:'3.3.8',orders7:12,lastActive:'2026-06-19 12:10',active:true,company:'Bella Bona Munich'},
-  {name:'Roberto',email:'roberto@bellabona.com',phone:'+49 151 1111 0011',kitchen:'Munich',vehicle:'Caddy',os:'iOS 17',appVersion:'3.4.2',orders7:78,lastActive:'2026-06-19 13:30',active:true,company:'Bella Bona Munich'},
-  {name:'Valentin',email:'valentin@bellabona.com',phone:'+49 151 1111 0012',kitchen:'Munich',vehicle:'Caddy',os:'Android 13',appVersion:'3.4.1',orders7:45,lastActive:'2026-06-19 13:12',active:true,company:'Bella Bona Munich'},
+  {name:'Munich02',email:'munich02@bellabona.com',phone:'+49 151 1111 0010',kitchen:'Munich',vehicle:'Caddy',os:'Android 11',appVersion:'3.3.8',orders7:12,lastActive:'2026-06-19 12:10',active:true,company:'Drive Munich'},
+  {name:'Roberto',email:'roberto@bellabona.com',phone:'+49 151 1111 0011',kitchen:'Munich',vehicle:'Caddy',os:'iOS 17',appVersion:'3.4.2',orders7:78,lastActive:'2026-06-19 13:30',active:true,company:'Drive Munich'},
+  {name:'Valentin',email:'valentin@bellabona.com',phone:'+49 151 1111 0012',kitchen:'Munich',vehicle:'Caddy',os:'Android 13',appVersion:'3.4.1',orders7:45,lastActive:'2026-06-19 13:12',active:true,company:'Drive Munich'},
   {name:'adrian2',email:'adrian2@bellabona.com',phone:'+49 151 1111 0013',kitchen:'Munich',vehicle:'Caddy',os:'Android 12',appVersion:'3.4.0',orders7:38,lastActive:'2026-06-19 13:20',active:true,company:'Adrian'},
   {name:'adrian3',email:'adrian3@bellabona.com',phone:'+49 151 1111 0014',kitchen:'Munich',vehicle:'Caddy',os:'iOS 16',appVersion:'3.4.1',orders7:65,lastActive:'2026-06-19 12:50',active:true,company:'Adrian'},
   {name:'Ali1',email:'ali1@bellabona.com',phone:'+49 151 2222 0001',kitchen:'Berlin',vehicle:'Caddy',os:'Android 13',appVersion:'3.4.2',orders7:52,lastActive:'2026-06-19 13:35',active:true,company:'Interkep'},
@@ -308,12 +308,12 @@ const ROUTINGS_DATA = [
 ];
 
 const SHIFTS_DATA = [
-  {prio:1,vehicle:'Caddy',courier:'Roberto',company:'Bella Bona Munich',location:'Munich',hours:'11:00-12:45',guaranteed:true,delay:0,maxPkg:30},
+  {prio:1,vehicle:'Caddy',courier:'Roberto',company:'Drive Munich',location:'Munich',hours:'11:00-12:45',guaranteed:true,delay:0,maxPkg:30},
   {prio:5,vehicle:'Caddy',courier:'Bouchi1',company:'Bouchi',location:'Munich',hours:'11:30-14:00',guaranteed:true,delay:15,maxPkg:25},
-  {prio:5,vehicle:'Caddy',courier:'Munich02',company:'Bella Bona Munich',location:'Munich',hours:'12:00-14:00',guaranteed:false,delay:0,maxPkg:10},
+  {prio:5,vehicle:'Caddy',courier:'Munich02',company:'Drive Munich',location:'Munich',hours:'12:00-14:00',guaranteed:false,delay:0,maxPkg:10},
   {prio:10,vehicle:'Caddy',courier:'Kurt',company:'Kurt',location:'Munich',hours:'11:30-14:00',guaranteed:true,delay:15,maxPkg:25},
-  {prio:10,vehicle:'Caddy',courier:'Ivan',company:'Bella Bona Munich',location:'Munich',hours:'11:30-14:00',guaranteed:true,delay:10,maxPkg:25},
-  {prio:10,vehicle:'Caddy',courier:'Valentin',company:'Bella Bona Munich',location:'Munich',hours:'11:30-14:00',guaranteed:true,delay:10,maxPkg:25},
+  {prio:10,vehicle:'Caddy',courier:'Ivan',company:'Drive Munich',location:'Munich',hours:'11:30-14:00',guaranteed:true,delay:10,maxPkg:25},
+  {prio:10,vehicle:'Caddy',courier:'Valentin',company:'Drive Munich',location:'Munich',hours:'11:30-14:00',guaranteed:true,delay:10,maxPkg:25},
   {prio:13,vehicle:'Caddy',courier:'Kurt1',company:'Kurt',location:'Munich',hours:'11:30-14:00',guaranteed:true,delay:15,maxPkg:25},
   {prio:16,vehicle:'Truck',courier:'Kurt2',company:'Kurt',location:'Munich',hours:'11:30-14:00',guaranteed:false,delay:20,maxPkg:40},
   {prio:17,vehicle:'Caddy',courier:'Kurt3',company:'Kurt',location:'Munich',hours:'11:30-14:00',guaranteed:true,delay:15,maxPkg:30},
@@ -343,7 +343,7 @@ const MUNICH_ZIPS = [
 ];
 
 const COMPANIES_DATA = [
-  {name:'Bella Bona Munich',couriers:14,orders7:421,contact:'munich@bellabona.com'},
+  {name:'Drive Munich',couriers:14,orders7:421,contact:'munich@bellabona.com'},
   {name:'Bouchi',couriers:1,orders7:62,contact:'bouchi@partner.com'},
   {name:'Kurt',couriers:5,orders7:299,contact:'kurt@partner.com'},
   {name:'Adrian',couriers:3,orders7:121,contact:'adrian@partner.com'},
@@ -640,7 +640,7 @@ async function geocodeAddress(address, postCode, city) {
     try {
       const r = await fetch(
         'https://nominatim.openstreetmap.org/search?q='+q+'&format=json&limit=1&countrycodes=de',
-        { headers: { 'Accept-Language': 'de', 'User-Agent': 'BellaBona-LMM/1.0' } }
+        { headers: { 'Accept-Language': 'de', 'User-Agent': 'Drive-App/1.0' } }
       );
       const data = await r.json();
       if (data && data[0]) {
@@ -746,7 +746,7 @@ function initDashMap(routes) {
   // Add kitchen depot marker
   L.marker(depot, {icon: L.divIcon({className:'',
     html:'<div style="background:#1a1a2e;color:#fff;border-radius:6px;padding:4px 8px;font-size:11px;font-weight:700;border:2px solid #e85d04;box-shadow:0 2px 6px rgba(0,0,0,0.4)">🏭 Kitchen</div>',
-    iconAnchor:[0,0]})}).addTo(leafletMap).bindPopup('<b>BellaBona Kitchen</b><br>'+(dashboardTab==='Munich'?'Kapellenstraße 12, Feldkirchen':'Friedrich-Engels-Str. 28, Potsdam'));
+    iconAnchor:[0,0]})}).addTo(leafletMap).bindPopup('<b>Kitchen (Internal)</b><br>'+(dashboardTab==='Munich'?'Kapellenstraße 12, Feldkirchen':'Friedrich-Engels-Str. 28, Potsdam'));
 
   // If we have a loaded plan, show real geocoded stop positions
   if (window._planStops && window._planStops.length > 0) {
@@ -1738,7 +1738,7 @@ async function renderDriverApp() {
   document.getElementById('content').innerHTML =
     '<div style="max-width:480px;margin:0 auto;padding:16px">' +
     '<div style="background:#1a1a2e;color:#fff;border-radius:12px;padding:16px;margin-bottom:16px;text-align:center">' +
-      '<div style="font-size:20px;font-weight:900;color:#e85d04">BellaBona</div>' +
+      '<div style="font-size:20px;font-weight:900;color:#e85d04">Drive</div>' +
       '<div style="font-size:13px;opacity:0.7">Driver App · '+dateParam+'</div>' +
     '</div>' +
     (driverParam ?
@@ -2297,7 +2297,7 @@ function planExportExcel() {
   ws2['!cols'] = [12,30,20,25,8,12,8,30,20].map(w=>({wch:w}));
   XLSX.utils.book_append_sheet(wb, ws2, 'Details');
 
-  const fileName = `BellaBona_${_planKitchen}_${_planDate}.xlsx`;
+  const fileName = `Drive_${_planKitchen}_${_planDate}.xlsx`;
   XLSX.writeFile(wb, fileName);
 }
 
@@ -2388,13 +2388,13 @@ function parseOmsJson(raw) {
           count:(dish.users||[]).reduce((s,u)=>s+(u.orderedQuantity||0),0) });
       });
     });
-    // Handle BellaBona kitchen/internal entries (null delivery address)
+    // Handle internal kitchen entries (notries (null delivery address)
     const isBBInternal = !branch.deliveryAddress && (
       (branch.name||'').toLowerCase().includes('bella') ||
-      (branch.name||'').toLowerCase().includes('bellabona') ||
+      (branch.name||'').toLowerCase().includes('drive_internal') ||
       (branch.name||'').toLowerCase().includes('kitchen')
     );
-    const address  = branch.deliveryAddress  || (isBBInternal ? 'BellaBona Kitchen' : '');
+    const address  = branch.deliveryAddress  || (isBBInternal ? 'Kitchen (Internal)' : '');
     const postCode = branch.deliveryPostalCode || (isBBInternal ? '14473' : ''); // Potsdam
     const city     = branch.deliveryCity     || (isBBInternal ? 'Potsdam' : '');
 
@@ -2404,7 +2404,7 @@ function parseOmsJson(raw) {
       address,
       postCode,
       city,
-      deliveryInfo: branch.deliveryInstructions || (isBBInternal ? 'BellaBona internal — kitchen stop' : ''),
+      deliveryInfo: branch.deliveryInstructions || (isBBInternal ? 'Internal kitchen stop' : ''),
       orderCount:  totalBoxes || 1,
       userCount:   uniqueUsers.size,
       readyTime:   branch.readyTime,
@@ -3072,7 +3072,7 @@ function openImportModal() {
     '<div style="background:#f0fdf4;border:1px solid #bbf7d0;border-radius:8px;padding:12px;font-size:13px;margin-bottom:16px">' +
       '<b>CSV Format</b> (first row = header):<br>' +
       '<code style="font-size:11px;display:block;margin-top:6px;background:#fff;padding:8px;border-radius:4px;border:1px solid #d1d5db;overflow-x:auto;white-space:nowrap">date,company_name,address_line,postal_code,city,box_count,window_start,window_end,contact_info,notes,kitchen,external_id</code>' +
-      '<a href="data:text/csv;charset=utf-8,date,company_name,address_line,postal_code,city,box_count,window_start,window_end,contact_info,notes,kitchen,external_id%0A2026-06-19,Example GmbH,Musterstr. 1,80333,Munich,2,11:00,14:00,,Special note,Munich,EXT-001" download="bellabona-import-template.csv" class="btn btn-sm" style="margin-top:8px">⬇ Download Template</a>' +
+      '<a href="data:text/csv;charset=utf-8,date,company_name,address_line,postal_code,city,box_count,window_start,window_end,contact_info,notes,kitchen,external_id%0A2026-06-19,Example GmbH,Musterstr. 1,80333,Munich,2,11:00,14:00,,Special note,Munich,EXT-001" download="import-template.csv" class="btn btn-sm" style="margin-top:8px">⬇ Download Template</a>' +
     '</div>' +
     '<div id="csv-drop" style="border:2px dashed #d1d5db;border-radius:8px;padding:32px;text-align:center;cursor:pointer;transition:border-color 0.2s" ondragover="event.preventDefault();this.style.borderColor=\'#e85d04\'" ondragleave="this.style.borderColor=\'#d1d5db\'" ondrop="handleCsvDrop(event)">' +
       '<div style="font-size:32px;margin-bottom:8px">📄</div>' +
@@ -3365,7 +3365,7 @@ function _driverModalHtml(d, idx) {
         _mf('Vehicle (e.g. VW Caddy)','dm-car','text',v('car',v('vehicle'))) +
         _mf('License Plate','dm-plate','text',v('plate')) +
       '</div>' +
-      (isNew ? _mf('Password','dm-pass','password','') : '') +
+      _mf(isNew ? 'Password *' : 'New Password (leave blank to keep current)','dm-pass','password','') +
       (!isNew ? '<details style="border:1px solid #e5e7eb;border-radius:6px;padding:8px">' +
         '<summary style="cursor:pointer;font-size:13px;font-weight:600;color:#374151">🔑 Reset Password (optional)</summary>' +
         '<div style="margin-top:8px">' + _mf('New Password','dm-pass','password','') + '</div>' +
@@ -3397,6 +3397,10 @@ async function saveDriver(idx) {
 
   const driverData = { name, city, phone, email, car, plate,
     active: idx < 0 ? true : ((window._allDrivers||[])[idx]||{}).active !== false,
+    // driverId used by Android app to match deliveries (same as name)
+    driverId: name,
+    // Store password note (actual auth should use Firebase Auth)
+    hasPassword: pass.length > 0 ? true : ((window._allDrivers||[])[idx]||{}).hasPassword || false,
     updatedAt: new Date().toISOString() };
 
   const id = idx < 0 ? name.toLowerCase().replace(/\s+/g,'_')+'_'+Date.now() : (window._allDrivers||[])[idx].id;
@@ -3486,7 +3490,7 @@ function openAddCourierModal() {
   '<h3>Add Courier</h3>' +
   '<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">' +
     '<div class="form-group"><label>Name *</label><input id="ac-name" placeholder="Roberto"></div>' +
-    '<div class="form-group"><label>Company</label><input id="ac-company" placeholder="Bella Bona Munich"></div>' +
+    '<div class="form-group"><label>Company</label><input id="ac-company" placeholder="Drive Munich"></div>' +
   '</div>' +
   '<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">' +
     '<div class="form-group"><label>Email</label><input type="email" id="ac-email" placeholder="name@bellabona.com"></div>' +
@@ -3850,7 +3854,7 @@ function renderRoutingDetail(idx) {
     '<div class="form-group"><label>Name</label><input id="rt-name" type="text" value="'+r.name+' Depot"></div>' +
     '<div class="form-group"><label>Address</label><input id="rt-addr" type="text" value="'+r.baseAddr+'"></div>' +
     '<div class="form-group"><label>Email Recipients</label><input id="rt-email" type="email" value="ops@bellabona.com"></div>' +
-    '<div class="form-group"><label>Connected Process</label><select><option>Bella Bona Delivery Process</option></select></div>' +
+    '<div class="form-group"><label>Connected Process</label><select><option>Drive Delivery Process</option></select></div>' +
     '<button class="btn btn-primary" onclick="alert(\'Routing settings saved (demo mode — connect to /api/routings to persist)\')">💾 Save Settings</button></div>';
   } else if(routingTab==='Couriers') {
     const kitchen = (r.name.includes('Potsdam')||r.name==='TEST')?'Berlin':'Munich';
@@ -3884,7 +3888,7 @@ function openAddShiftModal() {
   '<h3>Add Shift</h3>' +
   '<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">' +
     '<div class="form-group"><label>Courier Name *</label><input id="sh-courier" placeholder="Roberto"></div>' +
-    '<div class="form-group"><label>Company</label><input id="sh-company" placeholder="Bella Bona Munich"></div>' +
+    '<div class="form-group"><label>Company</label><input id="sh-company" placeholder="Drive Munich"></div>' +
   '</div>' +
   '<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">' +
     '<div class="form-group"><label>Vehicle</label><select id="sh-vehicle"><option>Caddy</option><option>Truck</option></select></div>' +
@@ -4415,7 +4419,7 @@ function openAddCompanyModal() {
   mo.innerHTML=
   '<div class="modal"><button class="modal-close" onclick="this.closest(\'.modal-overlay\').remove()">×</button>' +
   '<h3>Add Company</h3>' +
-  '<div class="form-group"><label>Company Name *</label><input id="co-name" placeholder="Bella Bona Munich GmbH"></div>' +
+  '<div class="form-group"><label>Company Name *</label><input id="co-name" placeholder="Company GmbH"></div>' +
   '<div class="form-group"><label>Contact Email</label><input type="email" id="co-email" placeholder="contact@company.com"></div>' +
   '<div class="form-group"><label>Contact Phone</label><input id="co-phone" placeholder="+49 89 1234567"></div>' +
   '<div class="form-group"><label>Address</label><input id="co-addr" placeholder="Musterstr. 1, 80333 Munich"></div>' +
@@ -4527,7 +4531,7 @@ function _paintSenders() {
   document.getElementById('content').innerHTML =
   '<div class="page">' +
   '<div class="page-header" style="display:flex;align-items:flex-start;justify-content:space-between">' +
-    '<div><h2>Sender Accounts</h2><p>Organizations that submit orders to BellaBona Drive</p></div>' +
+    '<div><h2>Sender Accounts</h2><p>Organizations that submit orders to Drive</p></div>' +
     '<button class="btn btn-primary" onclick="openAddSenderModal()">+ Add Sender</button>' +
   '</div>' +
   '<div class="card" style="margin-bottom:16px;background:#eff6ff;border-color:#bfdbfe">' +
@@ -5383,7 +5387,7 @@ tfoot tr{background:#f0f9ff}
 </style></head><body>
 <div class="header-row">
   <div>
-    <div class="logo">BellaBona</div>
+    <div class="logo">Drive</div>
     <div class="partner-title">${partnerName} - Pay Summary</div>
     <div class="month">Month: ${monthName}</div>
   </div>
@@ -5415,7 +5419,7 @@ tfoot tr{background:#f0f9ff}
 <div style="margin-top:20px;text-align:right" class="noprint">
   <button onclick="window.print()" style="background:${color};color:#fff;border:none;border-radius:7px;padding:10px 28px;cursor:pointer;font-size:14px;font-weight:700">🖨️ Save as PDF</button>
 </div>
-<div class="footer">BellaBona Logistic Management System · Generated ${new Date().toLocaleString('de-DE')} · Confidential</div>
+<div class="footer">Drive Logistics System · Generated ${new Date().toLocaleString('de-DE')} · Confidential</div>
 </body></html>`);
   win.document.close();
 }
@@ -5450,7 +5454,7 @@ td{padding:10px 12px;border-bottom:1px solid #e5e7eb;font-size:14px}
 .total{font-size:20px;font-weight:700;color:#e85d04;text-align:right}
 .footer{margin-top:40px;font-size:11px;color:#9ca3af;border-top:1px solid #e5e7eb;padding-top:10px}
 @media print{button{display:none}}</style></head><body>
-<div class="logo">BellaBona</div>
+<div class="logo">Drive</div>
 <div style="font-size:12px;color:#6b7280;margin-bottom:20px">Last Mile Management System</div>
 <h1>💶 Payment Report — ${partnerName}</h1>
 <table>
@@ -5472,7 +5476,7 @@ td{padding:10px 12px;border-bottom:1px solid #e5e7eb;font-size:14px}
 <div style="margin-top:20px;text-align:right">
   <button onclick="window.print()" style="background:#1a1a2e;color:#fff;border:none;border-radius:6px;padding:10px 24px;cursor:pointer;font-size:14px">🖨️ Save as PDF</button>
 </div>
-<div class="footer">Generated by BellaBona Drive · ${new Date().toLocaleString('de-DE')} · Confidential</div>
+<div class="footer">Generated by Drive · ${new Date().toLocaleString('de-DE')} · Confidential</div>
 </body></html>`);
   win.document.close();
 }
@@ -5978,7 +5982,7 @@ function exportCourierCSV() {
   const csv = rows.map(r=>r.map(v=>'"'+String(v).replace(/"/g,'""')+'"').join(',')).join('\n');
   const a = document.createElement('a');
   a.href = 'data:text/csv;charset=utf-8,'+encodeURIComponent(csv);
-  a.download = 'bellabona-courier-performance-'+new Date().toISOString().split('T')[0]+'.csv';
+  a.download = 'courier-performance-'+new Date().toISOString().split('T')[0]+'.csv';
   a.click();
 }
 
@@ -6095,9 +6099,9 @@ function _paintSettings() {
       '</div>' +
       '<div id="api-test-result"></div>' +
     '</div>' +
-    '<div class="card"><div class="section-title">About BellaBona Drive</div>' +
+    '<div class="card"><div class="section-title">About Drive</div>' +
       '<table style="width:100%;font-size:13px"><tbody>' +
-        '<tr><td style="color:#6b7280;padding:5px 0;width:160px">Platform</td><td>BellaBona Delivery Management</td></tr>' +
+        '<tr><td style="color:#6b7280;padding:5px 0;width:160px">Platform</td><td>Drive</td></tr>' +
         '<tr><td style="color:#6b7280;padding:5px 0">Version</td><td>1.0.0-phase9</td></tr>' +
         '<tr><td style="color:#6b7280;padding:5px 0">Backend</td><td>Node.js + Express + SQLite + MySQL</td></tr>' +
         '<tr><td style="color:#6b7280;padding:5px 0">Driver App</td><td>Expo React Native</td></tr>' +
