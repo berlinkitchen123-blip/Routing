@@ -937,7 +937,10 @@ async function renderPlanning() {
     '<button class="btn" onclick="planAutoAssign()" title="Assign by postal zone">🗺 Auto-Assign Zones</button>' +
     '<button class="btn" onclick="planLastWeek()" title="Copy from same day last week">📅 Use Last Week</button>' +
     '<button class="btn" style="background:#10b981;color:#fff;border-color:#10b981" onclick="planSaveToApp()">💾 Save → Driver App</button>' +
-    '<button class="btn" style="background:#dc2626;color:#fff;border-color:#dc2626" onclick="lockAndDispatch()">🔒 Lock & Dispatch</button>' +
+    '<div style="display:flex;align-items:center;gap:6px">' +
+    '<button class="btn" style="background:#dc2626;color:#fff;border-color:#dc2626;font-weight:700" onclick="lockAndDispatch()">🔒 Lock & Dispatch</button>' +
+    '<span id="dispatch-date-label" style="font-size:12px;color:#6b7280">for <b id="dispatch-date-show">' + (_planDate || new Date().toLocaleDateString('en-CA')) + '</b></span>' +
+  '</div>' +
     '<button class="btn" style="background:#217346;color:#fff;border-color:#217346" onclick="planExportExcel()">📊 Export Excel</button>' +
     '<button class="btn" style="background:#25d366;color:#fff;border-color:#25d366" onclick="planWhatsApp()">💬 WhatsApp</button>' +
     '<button class="btn" style="background:#0ea5e9;color:#fff;border-color:#0ea5e9" onclick="showPlanningMap()">📍 Map View</button>' +
@@ -1556,8 +1559,17 @@ async function lockAndDispatch() {
 
   if (!window._fbReady || !window._fbDb) { alert('Firebase not ready'); return; }
 
+  // Always use the date the user has selected in the date picker
+  const pickerDate = document.getElementById('plan-date')?.value || new Date().toLocaleDateString('en-CA');
+  const todayDate = new Date().toLocaleDateString('en-CA');
+  const dateStr = pickerDate;
+
+  // Clear warning if date is not today
+  if (pickerDate !== todayDate) {
+    if (!confirm('Dispatching for ' + pickerDate + ' (today is ' + todayDate + '). Correct date?')) return;
+  }
+
   const btn = event.target; btn.disabled=true; btn.textContent='Dispatching…';
-  const dateStr = _planDate || new Date().toLocaleDateString('en-CA');
   const kitchen = _planKitchen || 'Berlin';
   const dispatchKey = dateStr + '_' + kitchen;
   const now = new Date().toISOString();
@@ -2448,11 +2460,7 @@ async function importJsonData() {
     _planAssign = {};
     _planNotes  = {};
     // Auto-detect date from JSON (from uniqueIdentifier or use selected date)
-    const dateMatch = raw.match(/\d{4}-\d{2}-\d{2}/);
-    if (dateMatch && document.getElementById('plan-date')) {
-      _planDate = dateMatch[0];
-      document.getElementById('plan-date').value = _planDate;
-    }
+    // Note: do NOT auto-change _planDate from JSON — user controls the date via date picker
     document.querySelector('.modal-overlay').remove();
     // Try to apply weekly template (auto-assigns to drivers, colors red if no order)
     const bodyEl = document.getElementById('plan-body');
