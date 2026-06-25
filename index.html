@@ -1919,9 +1919,10 @@ async function renderDispatch(selectedDate) {
 
     if(!selected) return;
 
-    // Load kitchen pickups live section
+    // Load kitchen pickups live section — pass driver list directly from dispatch record
     setTimeout(() => {
-      renderKitchenPickupsSection(selected.date, 'dispatch-kitchen-pickups');
+      const driverIds = selected.drivers ? selected.drivers.map(d => d.driver || d.driverId || d).filter(Boolean) : [];
+      renderKitchenPickupsSection(selected.date, 'dispatch-kitchen-pickups', driverIds);
       const dot = document.getElementById('dispatch-pickup-dot');
       if(dot) dot.style.background = '#10b981';
     }, 100);
@@ -2002,8 +2003,11 @@ async function renderDispatch(selectedDate) {
           const border = st==='DELIVERED'?'#bbf7d0':st==='ARRIVED'||st==='SCANNED'?'#bfdbfe':'#e5e7eb';
           const statusTxt = st==='DELIVERED'?'✅ Delivered':st==='ARRIVED'?'📍 Arrived':st==='SCANNED'?'📷 Scanned':'⏳ Pending';
           const timeStr = s.match?.proofTimestamp ? '<br><span style="color:#6b7280">'+new Date(s.match.proofTimestamp).toLocaleTimeString('de-DE',{hour:'2-digit',minute:'2-digit'})+'</span>' : '';
-          return '<div onclick="openOD(\''+( s.match?.orderId||s.match?.id||'')+'\',\'app\')" style="background:'+bg+';border:1px solid '+border+';border-radius:6px;padding:6px 10px;font-size:11px;min-width:110px;cursor:'+(s.match?'pointer':'default')+'">' +
-            '<div style="font-weight:600">'+s.sequence+'. '+(s.company||'').substring(0,18)+'</div>' +
+          const hasProof = s.match?.proofImageUrl || s.match?.signatureImageUrl;
+          const proofUrl = s.match?.proofImageUrl || s.match?.signatureImageUrl;
+          const addrTitle = s.address ? ' title="'+s.address.replace(/"/g,'&quot;')+'"' : '';
+          return '<div onclick="openOD(\''+( s.match?.orderId||s.match?.id||'')+'\',\'app\')" style="background:'+bg+';border:1px solid '+border+';border-radius:6px;padding:6px 10px;font-size:11px;min-width:110px;cursor:'+(s.match?'pointer':'default')+'"'+addrTitle+'>' +
+            '<div style="font-weight:600;display:flex;align-items:center;justify-content:space-between;gap:4px"><span>'+s.sequence+'. '+(s.company||'').substring(0,16)+'</span>'+(hasProof?'<span onclick="event.stopPropagation();openProofLightbox(\''+proofUrl+'\',\''+s.company+' — Proof\')" title="View proof" style="cursor:zoom-in;font-size:12px">📷</span>':'')+'</div>' +
             '<div style="color:#6b7280">'+(s.orderCount||1)+' box'+(s.orderCount>1?'es':'')+'</div>' +
             '<div style="color:'+(st==='DELIVERED'?'#16a34a':st==='ARRIVED'||st==='SCANNED'?'#2563eb':'#9ca3af')+';font-size:10px">'+statusTxt+timeStr+'</div>' +
             '</div>';
@@ -3327,7 +3331,7 @@ function _updateTrialMapMarkers(progress) {
 // ============================================================
 let _kitchenPickupUnsub = null;
 
-async function renderKitchenPickupsSection(date, containerId) {
+async function renderKitchenPickupsSection(date, containerId, knownDrivers) {
   const container = document.getElementById(containerId);
   if(!container || !window._fbDb) return;
   const { collection: fbColl, onSnapshot } = window._firestoreModules || {};
@@ -3337,14 +3341,27 @@ async function renderKitchenPickupsSection(date, containerId) {
 
   container.innerHTML = '<div style="color:#9ca3af;font-size:13px;padding:8px 0">Loading pickup confirmations…</div>';
 
-  // Listen to kitchenPickups/{date} subcollections for all drivers
-  // We'll query the top-level and listen per driver name from deliveries
-  const { getDocs, query: fbQ, where: fbW } = window._firestoreModules || {};
-  if(!getDocs) return;
+  // Use driver list passed in (from dispatch record) to avoid date-format mismatch in Firestore query
+  let drivers = knownDrivers && knownDrivers.length > 0 ? [...new Set(knownDrivers)] : [];
 
-  // Get list of drivers for this date
-  const snap = await getDocs(fbQ(fbColl(window._fbDb,'deliveries'), fbW('date','==',date)));
-  const drivers = [...new Set(snap.docs.map(d=>d.data().driverId).filter(Boolean))];
+  // Fallback: query deliveries if no driver list provided
+  if(drivers.length === 0) {
+    try {
+      const { getDocs, query: fbQ, where: fbW } = window._firestoreModules || {};
+      if(getDocs) {
+        // Try both date formats: ISO (2026-06-25) and German (25.06.2026)
+        const isoDate = date; // e.g. 2026-06-25
+        const parts = isoDate.split('-');
+        const germanDate = parts.length === 3 ? parts[2]+'.'+parts[1]+'.'+parts[0] : isoDate;
+        const [snap1, snap2] = await Promise.all([
+          getDocs(fbQ(fbColl(window._fbDb,'deliveries'), fbW('date','==',isoDate))),
+          getDocs(fbQ(fbColl(window._fbDb,'deliveries'), fbW('date','==',germanDate)))
+        ]);
+        const allDocs = [...snap1.docs, ...snap2.docs];
+        drivers = [...new Set(allDocs.map(d=>d.data().driverId).filter(Boolean))];
+      }
+    } catch(e) { console.warn('Kitchen pickup driver lookup failed', e); }
+  }
 
   const pickupsByDriver = {};
   let listenersLeft = drivers.length;
@@ -3549,8 +3566,9 @@ async function renderRoutePlans() {
   ) +
   '</div>';
 
-  // Load kitchen pickups live section after DOM renders
-  setTimeout(() => renderKitchenPickupsSection(_rpDate, 'rp-kitchen-pickups'), 50);
+  // Load kitchen pickups live section — pass driver list from already-loaded deliveries
+  const rpDriverIds = [...new Set(deliveries.map(d=>d.driverId||d.driverName).filter(Boolean))];
+  setTimeout(() => renderKitchenPickupsSection(_rpDate, 'rp-kitchen-pickups', rpDriverIds), 50);
 }
 
 function toggleRP(idx) {
@@ -4116,7 +4134,8 @@ async function openOD(orderId, source) {
     const actionLabel = {
       STOP_OPENED:'📍 Stop opened by driver', NAVIGATE_STARTED:'🧭 Navigation started',
       QR_SCANNED:'📷 QR code scanned', QR_MATCHED:'✅ QR code matched',
-      BOX_CHECKED:'📦 Box checked', DELIVERED:'✅ Delivered', DELAY_REPORTED:'⚠ Delay reported'
+      BOX_CHECKED:'📦 Box checked', BOX_SCANNED:'📷 Box scanned', KITCHEN_PICKUP:'🏠 Kitchen pickup confirmed',
+      DELIVERED:'✅ Delivered', DELAY_REPORTED:'⚠ Delay reported'
     };
     const tlItems = events.map(ev => ({
       label: actionLabel[ev.action] || ev.action,
