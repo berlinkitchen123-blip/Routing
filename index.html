@@ -1738,6 +1738,10 @@ async function lockAndDispatch() {
     }
 
     const datePart = dateStr.replace(/-/g,''); // 20260625
+    // Short ID prefix: K = kitchen initial (B/M), MMDD, e.g. B0625
+    const kitchenChar = (kitchen||'B').charAt(0).toUpperCase();
+    const mmdd = dateStr.slice(5).replace('-',''); // "0625"
+    const shortPrefix = kitchenChar + mmdd; // e.g. "B0625"
     let orderSeq = 1;
     const writeBatchObj = writeBatch ? writeBatch(window._fbDb) : null;
     const writePromises = [];
@@ -1752,7 +1756,8 @@ async function lockAndDispatch() {
 
       for (const stop of route.stops) {
         // Clean order ID: ORD-20260625-001
-        const orderId = 'ORD-' + datePart + '-' + String(orderSeq).padStart(3,'0');
+        // Short 7-char order ID: e.g. B062501, B062502 … B062599
+        const orderId = shortPrefix + String(orderSeq).padStart(2,'0');
         orderSeq++;
 
         // Per-box QR codes: {orderId}#{boxNumber} — parseable by Android scanner
