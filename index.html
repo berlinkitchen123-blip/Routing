@@ -1973,18 +1973,54 @@ async function planSaveToApp() {
       hasOrder: s.hasOrder!==false,
     }));
 
-    // Always save to Firestore (cloud mode primary storage)
     if (window._fbReady && window._fbDb) {
+      // 1. Save daily plan (existing behaviour)
       await window._fbSetDoc(window._fbDoc(window._fbDb, 'dailyPlans', _planDate + '_' + _planKitchen), {
         date: _planDate, kitchen: _planKitchen,
         savedAt: new Date().toISOString(),
-        assignments,
-        notes: _planNotes,
-        drivers: _planDrivers,
+        assignments, notes: _planNotes, drivers: _planDrivers,
       });
+
+      // 2. Write each stop to `deliveries` collection so Android app can read it
+      const { addDoc, writeBatch } = await import('https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js');
+      const batch = writeBatch(window._fbDb);
+
+      // Clear existing deliveries for this date+kitchen before rewriting
+      const { getDocs, query, where } = await import('https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js');
+      const existing = await getDocs(
+        query(window._fbCollection(window._fbDb, 'deliveries'),
+          where('date', '==', _planDate), where('kitchen', '==', _planKitchen))
+      );
+      existing.forEach(d => batch.delete(d.ref));
+
+      // Add fresh delivery doc for every stop
+      _planStops.forEach((stop, idx) => {
+        const driverName = _planAssign[stop.branchId] || 'Unassigned';
+        const newRef = window._fbDoc(window._fbCollection(window._fbDb, 'deliveries'));
+        batch.set(newRef, {
+          driverId: driverName,
+          companyName: stop.company || stop.branchId || '',
+          address: (stop.address || '') + (stop.city ? ', ' + stop.city : ''),
+          postalCode: stop.postCode || '',
+          deliveryInstructions: stop.deliveryInfo || _planNotes[stop.branchId] || '',
+          numberOfBoxes: stop.orderCount || 1,
+          status: 'PENDING',
+          date: _planDate,
+          kitchen: _planKitchen,
+          routeOrder: idx,
+          order: idx,
+          sequence: idx,
+          time: stop.time || '',
+          qrCode: stop.branchId || (driverName + '_' + idx + '_' + _planDate),
+          timestamp: new Date().toISOString(),
+          savedAt: Date.now(),
+        });
+      });
+
+      await batch.commit();
+      console.log('[planSaveToApp] Wrote', _planStops.length, 'deliveries to Firestore');
     }
 
-    // Also try local server if configured
     if (API_BASE) {
       const r = await fetch(`${API_BASE}/api/planning/save`, {
         method:'POST', headers:{'Content-Type':'application/json'},
@@ -1995,10 +2031,123 @@ async function planSaveToApp() {
     }
 
     const el = document.getElementById('plan-msg');
-    if(el) el.innerHTML='<div style="background:#f0fdf4;border:1px solid #bbf7d0;border-radius:8px;padding:10px 14px;font-size:13px;color:#16a34a;margin-bottom:8px">✅ Plan saved to Firebase for '+_planDate+' ('+_planKitchen+')</div>';
-  } catch(e) { alert('Save error: '+e.message); }
+    if(el) el.innerHTML='<div style="background:#f0fdf4;border:1px solid #bbf7d0;border-radius:8px;padding:10px 14px;font-size:13px;color:#16a34a;margin-bottom:8px">✅ Plan saved to Firebase + Driver App for '+_planDate+' ('+_planKitchen+') — '+_planStops.length+' stops</div>';
+  } catch(e) { alert('Save error: '+e.message); console.error(e); }
   btn.disabled=false; btn.textContent='💾 Save → Driver App';
 }
+
+// ── Android App ↔ Backend real-time sync ─────────────────────────────────────
+// Listens to Firestore for delivery status updates and driver GPS from Android app
+async function initAndroidAppSync() {
+  if (!window._fbReady || !window._fbDb) return;
+  const { onSnapshot, collection, query, where } =
+    await import('https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js');
+
+  // 1. Delivery status changes from Android app → update planning grid
+  onSnapshot(collection(window._fbDb, 'deliveries'), (snapshot) => {
+    snapshot.docChanges().forEach((change) => {
+      if (change.type === 'modified' || change.type === 'added') {
+        const task = change.doc.data();
+        if (task.status === 'DELIVERED' || task.status === 'PICKED_UP') {
+          _onAndroidDeliveryUpdate(change.doc.id, task);
+        }
+      }
+    });
+  });
+
+  // 2. Driver GPS locations from Android app → show on dispatch map
+  onSnapshot(collection(window._fbDb, 'driver_locations'), (snapshot) => {
+    snapshot.docChanges().forEach((change) => {
+      const loc = change.doc.data();
+      if (loc && loc.lat && loc.lng) _updateDriverMapMarker(loc);
+    });
+  });
+
+  // 3. Delay reports from Android app → show badge on driver card
+  onSnapshot(collection(window._fbDb, 'driver_locations'), (snapshot) => {
+    snapshot.docChanges().forEach((change) => {
+      const loc = change.doc.data();
+      if (loc && loc.estimatedDelayMins > 0) _showDriverDelayBadge(loc);
+    });
+  });
+
+  console.log('[AndroidSync] Real-time sync active ✓');
+}
+
+function _onAndroidDeliveryUpdate(taskId, task) {
+  const driver = task.driverId || '';
+  const company = task.companyName || taskId;
+  const status = task.status;
+  const time = task.proofTimestamp
+    ? new Date(task.proofTimestamp).toLocaleTimeString('de-DE', {hour:'2-digit',minute:'2-digit'})
+    : new Date().toLocaleTimeString('de-DE', {hour:'2-digit',minute:'2-digit'});
+
+  // Highlight matching cells in the planning grid
+  document.querySelectorAll('[data-branch-id]').forEach(cell => {
+    const name = (cell.dataset.branchId || cell.textContent || '').toLowerCase();
+    if (name.includes(company.toLowerCase().substring(0, 8))) {
+      cell.style.background = status === 'DELIVERED' ? '#dcfce7' : '#fef9c3';
+      cell.title = `${status} by ${driver} at ${time}`;
+    }
+  });
+
+  _showSyncToast((status === 'DELIVERED' ? '✅' : '📦') + ` ${driver}: ${company} → ${status} ${time}`);
+}
+
+const _driverMapMarkers = {};
+function _updateDriverMapMarker(loc) {
+  if (!window._dashMap && !window._planMap) return;
+  const map = window._dashMap || window._planMap;
+  const id = loc.driverId || 'unknown';
+  const pos = [loc.lat, loc.lng];
+  const speedKmh = loc.speed > 0 ? (loc.speed * 3.6).toFixed(0) + ' km/h' : 'stopped';
+  const online = loc.online !== false;
+  const delay = loc.estimatedDelayMins > 0 ? ` ⚠️+${loc.estimatedDelayMins}m` : '';
+  const html = `<div style="background:${online?'#1A73E8':'#9E9E9E'};color:#fff;padding:2px 7px;border-radius:12px;font-size:11px;white-space:nowrap;font-weight:bold">${id.split('@')[0]}${delay}</div>`;
+
+  if (!_driverMapMarkers[id]) {
+    _driverMapMarkers[id] = L.marker(pos, {
+      icon: L.divIcon({ className:'', html, iconAnchor:[0,0] }),
+      zIndexOffset: 500
+    }).addTo(map).bindPopup(`<b>${id}</b><br>${speedKmh}${delay ? '<br><span style="color:red">Delay: +'+loc.estimatedDelayMins+'min</span>' : ''}`);
+  } else {
+    _driverMapMarkers[id].setLatLng(pos);
+    _driverMapMarkers[id].setIcon(L.divIcon({ className:'', html, iconAnchor:[0,0] }));
+  }
+  if (!online) _driverMapMarkers[id].setOpacity(0.45);
+}
+
+function _showDriverDelayBadge(loc) {
+  const id = (loc.driverId || '').split('@')[0].toLowerCase();
+  const mins = loc.estimatedDelayMins;
+  document.querySelectorAll('.courier-name, [data-driver]').forEach(el => {
+    if ((el.textContent || '').toLowerCase().includes(id)) {
+      const existing = el.parentElement?.querySelector('.delay-badge');
+      if (existing) existing.remove();
+      if (mins > 0) {
+        const badge = document.createElement('span');
+        badge.className = 'delay-badge';
+        badge.style.cssText = 'background:#ef4444;color:#fff;font-size:10px;padding:1px 5px;border-radius:10px;margin-left:4px;font-weight:bold';
+        badge.textContent = `+${mins}m`;
+        el.parentElement?.appendChild(badge);
+      }
+    }
+  });
+}
+
+function _showSyncToast(msg) {
+  const el = document.createElement('div');
+  el.textContent = msg;
+  el.style.cssText = 'position:fixed;bottom:24px;right:24px;background:#1a1a2e;color:#fff;padding:10px 18px;border-radius:10px;z-index:9999;font-size:13px;opacity:0;transition:opacity .3s;max-width:320px;box-shadow:0 4px 12px rgba(0,0,0,0.3)';
+  document.body.appendChild(el);
+  requestAnimationFrame(() => { el.style.opacity = '1'; });
+  setTimeout(() => { el.style.opacity = '0'; setTimeout(() => el.remove(), 400); }, 4000);
+}
+
+// Auto-start sync when page loads
+document.addEventListener('DOMContentLoaded', () => {
+  setTimeout(initAndroidAppSync, 1500); // wait for Firebase auth
+});
 
 function clearAndReload(e) {
   e.preventDefault();
