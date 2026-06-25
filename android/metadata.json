@@ -1,0 +1,6 @@
+{
+  "name": "Routing",
+  "description": "Android app wrapper for a Github Pages Routing web app.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
