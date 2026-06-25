@@ -37,10 +37,14 @@ import android.content.Intent
 import android.net.Uri
 import androidx.compose.ui.platform.LocalContext
 import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.foundation.Image
+import androidx.compose.ui.graphics.asAndroidPath
+import androidx.core.content.FileProvider
+import java.io.File
 
 import com.example.ui.screens.scanner.ScannerScreen
 import com.example.data.repository.DeliveryRepository
@@ -267,11 +271,36 @@ fun SignatureCaptureScreen(
     var updateCount by remember { mutableStateOf(0) }
     var capturedImage by remember { mutableStateOf<Bitmap?>(null) }
     var showSignaturePad by remember { mutableStateOf(false) }
+    // Track the actual canvas pixel size so we can export at the right resolution
+    var canvasWidthPx by remember { mutableStateOf(0f) }
+    var canvasHeightPx by remember { mutableStateOf(0f) }
+    val context = LocalContext.current
 
-    val cameraLauncher = rememberLauncherForActivityResult(ActivityResultContracts.TakePicturePreview()) { bitmap ->
-        if (bitmap != null) {
-            capturedImage = bitmap
+    // Holds the URI for the current full-resolution photo file
+    var photoUri by remember { mutableStateOf<android.net.Uri?>(null) }
+
+    // Full-resolution camera — saves directly to a file, no thumbnail degradation
+    val cameraLauncher = rememberLauncherForActivityResult(ActivityResultContracts.TakePicture()) { success ->
+        if (success && photoUri != null) {
+            // Decode the full-resolution JPEG from file
+            val bitmap = context.contentResolver.openInputStream(photoUri!!)?.use { stream ->
+                BitmapFactory.decodeStream(stream)
+            }
+            if (bitmap != null) capturedImage = bitmap
         }
+    }
+
+    // Creates a fresh temp file and returns its content URI via FileProvider
+    fun launchCamera() {
+        val photoFile = File(context.cacheDir, "proof_photos").also { it.mkdirs() }
+            .let { File(it, "proof_${System.currentTimeMillis()}.jpg") }
+        val uri = FileProvider.getUriForFile(
+            context,
+            "${context.packageName}.fileprovider",
+            photoFile
+        )
+        photoUri = uri
+        cameraLauncher.launch(uri)
     }
     
     Scaffold(
@@ -287,13 +316,42 @@ fun SignatureCaptureScreen(
         },
         bottomBar = {
             Button(
-                onClick = { onComplete(if (capturedImage != null) "IMAGE" else "SIGNATURE", capturedImage) },
+                onClick = {
+                    if (capturedImage != null) {
+                        // Full-res photo already captured from file
+                        onComplete("IMAGE", capturedImage)
+                    } else if (paths.isNotEmpty()) {
+                        // Render signature at 3× the actual canvas resolution for crisp, high-quality PNG
+                        val scale = 3f
+                        val srcW = if (canvasWidthPx > 0f) canvasWidthPx else 1080f
+                        val srcH = if (canvasHeightPx > 0f) canvasHeightPx else 600f
+                        val bmpW = (srcW * scale).toInt()
+                        val bmpH = (srcH * scale).toInt()
+                        val sigBitmap = Bitmap.createBitmap(bmpW, bmpH, Bitmap.Config.ARGB_8888)
+                        val canvas = android.graphics.Canvas(sigBitmap)
+                        canvas.drawColor(android.graphics.Color.WHITE)
+                        // Scale the canvas so path coordinates (in original px) map to 3× bitmap space
+                        canvas.scale(scale, scale)
+                        val paint = android.graphics.Paint().apply {
+                            isAntiAlias = true
+                            color = android.graphics.Color.BLACK
+                            style = android.graphics.Paint.Style.STROKE
+                            strokeWidth = 5f   // same as on-screen; scale() handles the rest
+                            strokeCap = android.graphics.Paint.Cap.ROUND
+                            strokeJoin = android.graphics.Paint.Join.ROUND
+                        }
+                        paths.forEach { composePath ->
+                            canvas.drawPath(composePath.asAndroidPath(), paint)
+                        }
+                        onComplete("SIGNATURE", sigBitmap)
+                    }
+                },
                 modifier = Modifier.fillMaxWidth().padding(16.dp).height(56.dp),
                 enabled = capturedImage != null || paths.isNotEmpty(),
                 colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary),
                 shape = RoundedCornerShape(12.dp)
             ) {
-                Text("Submit & Finish", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 16.sp) 
+                Text("Submit & Finish", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 16.sp)
             }
         }
     ) { padding ->
@@ -306,13 +364,13 @@ fun SignatureCaptureScreen(
                     modifier = Modifier.weight(1f).fillMaxWidth().border(1.dp, Color.Gray, RoundedCornerShape(8.dp))
                 )
                 Spacer(modifier = Modifier.height(16.dp))
-                OutlinedButton(onClick = { cameraLauncher.launch(null) }) {
+                OutlinedButton(onClick = { launchCamera() }) {
                     Text("Retake Photo")
                 }
             } else if (!showSignaturePad) {
                 Text("A photo is required for proof of delivery.", style = MaterialTheme.typography.bodyLarge, modifier = Modifier.padding(bottom = 24.dp))
                 Button(
-                    onClick = { cameraLauncher.launch(null) },
+                    onClick = { launchCamera() },
                     modifier = Modifier.fillMaxWidth().height(56.dp),
                     shape = RoundedCornerShape(12.dp)
                 ) {
@@ -352,6 +410,11 @@ fun SignatureCaptureScreen(
                                 )
                             }
                     ) {
+                        // Capture canvas size on first draw for high-res export
+                        if (canvasWidthPx == 0f) {
+                            canvasWidthPx = size.width
+                            canvasHeightPx = size.height
+                        }
                         val trigger = updateCount
                         paths.forEach { path ->
                             drawPath(

@@ -350,10 +350,24 @@ class DeliveryRepository {
     ): String? {
         return try {
             val storage = com.google.firebase.storage.FirebaseStorage.getInstance()
-            val ref = storage.reference.child("proofs/$taskId/$type.jpg")
             val baos = java.io.ByteArrayOutputStream()
-            bitmap.compress(android.graphics.Bitmap.CompressFormat.JPEG, 85, baos)
+
+            // Signature: lossless PNG to preserve every stroke detail
+            // Photo: JPEG at 100% quality (effectively lossless, much smaller than PNG)
+            val isSignature = type == "signature"
+            val extension: String
+            if (isSignature) {
+                extension = "png"
+                bitmap.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, baos)
+            } else {
+                extension = "jpg"
+                // Use JPEG 100 for maximum quality with no visible compression artifacts
+                bitmap.compress(android.graphics.Bitmap.CompressFormat.JPEG, 100, baos)
+            }
+
+            val ref = storage.reference.child("proofs/$taskId/$type.$extension")
             val data = baos.toByteArray()
+            Log.d("DeliveryRepository", "Uploading $type proof: ${data.size / 1024}KB as $extension")
             ref.putBytes(data).await()
             val url = ref.downloadUrl.await().toString()
             // Store URL back in the delivery doc
