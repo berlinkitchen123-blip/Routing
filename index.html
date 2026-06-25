@@ -218,7 +218,10 @@ tbody tr{transition:background 0.1s;cursor:pointer}
 </div>
 
 <script>
-let API_BASE = (() => { try { return localStorage.getItem('lmm_api_base') || ''; } catch(e) { return ''; } })();
+// Force Firebase-only mode when running on GitHub Pages
+const _isGitHubPages = location.hostname.includes('github.io') || location.hostname.includes('berlinkitchen123-blip');
+let API_BASE = _isGitHubPages ? '' : (() => { try { return localStorage.getItem('lmm_api_base') || ''; } catch(e) { return ''; } })();
+if (_isGitHubPages) console.log('[Drive] GitHub Pages mode — Firebase only, local API disabled');
 let _weeklyTemplate = null;   // loaded from Firestore weeklyTemplates/{day}
 
 const MUNICH_ROUTES = [
@@ -6243,10 +6246,16 @@ let settingsTab = 'process';
 async function renderSettings() {
   document.getElementById('content').innerHTML = '<div class="page"><div style="padding:60px;text-align:center;color:#9ca3af">Loading settings…</div></div>';
   try {
-    const r = await fetch(`${API_BASE}/api/process-config`);
-    const d = await r.json();
-    processConfig = d.map || {};
-  } catch(e) { processConfig={}; }
+    if (API_BASE) {
+      const r = await fetch(`${API_BASE}/api/process-config`);
+      const d = await r.json();
+      processConfig = d.map || {};
+    } else if (window._fbReady && window._fbDb) {
+      // Firebase-only mode: load config from Firestore
+      const snap = await window._fbGetDoc(window._fbDoc(window._fbDb, 'config', 'processConfig'));
+      processConfig = snap.exists() ? (snap.data() || {}) : {};
+    }
+  } catch(e) { processConfig = {}; }
   _paintSettings();
 }
 
@@ -6310,27 +6319,28 @@ function _paintSettings() {
     '<div><button class="btn btn-primary" onclick="saveDepotConfig()">💾 Save Depot Configuration</button></div>' +
     '</div>';
   } else if(settingsTab==='api') {
+    const fbStatus = window._fbReady
+      ? '<span style="color:#16a34a;font-weight:bold">✅ Connected</span>'
+      : '<span style="color:#ef4444">⚠️ Not connected</span>';
     tabBody =
     '<div style="display:flex;flex-direction:column;gap:16px;max-width:700px">' +
-    '<div class="card"><div class="section-title">API Connection</div>' +
-      '<div class="form-group"><label>Backend API Base URL</label>' +
-        '<div style="display:flex;gap:8px">' +
-          '<input id="cfg-apibase" value="'+API_BASE+'" style="flex:1" oninput="">' +
-          '<button class="btn btn-sm" onclick="testApiConnection()">Test</button>' +
-          '<button class="btn btn-sm btn-primary" onclick="saveApiBase()">Save</button>' +
-        '</div>' +
-      '</div>' +
-      '<div id="api-test-result"></div>' +
+    '<div class="card"><div class="section-title">Firebase Connection</div>' +
+      '<table style="width:100%;font-size:13px"><tbody>' +
+        '<tr><td style="color:#6b7280;padding:6px 0;width:160px">Status</td><td>'+fbStatus+'</td></tr>' +
+        '<tr><td style="color:#6b7280;padding:6px 0">Project</td><td><code>routing-22aad</code></td></tr>' +
+        '<tr><td style="color:#6b7280;padding:6px 0">Database</td><td>Cloud Firestore (europe-west)</td></tr>' +
+        '<tr><td style="color:#6b7280;padding:6px 0">Mode</td><td><span style="background:#dcfce7;color:#16a34a;padding:2px 8px;border-radius:10px;font-size:12px;font-weight:bold">🔥 Firebase Only</span></td></tr>' +
+        '<tr><td style="color:#6b7280;padding:6px 0">Local API</td><td><span style="color:#9ca3af">Disabled on GitHub Pages</span></td></tr>' +
+      '</tbody></table>' +
     '</div>' +
     '<div class="card"><div class="section-title">About Drive</div>' +
       '<table style="width:100%;font-size:13px"><tbody>' +
-        '<tr><td style="color:#6b7280;padding:5px 0;width:160px">Platform</td><td>Drive</td></tr>' +
-        '<tr><td style="color:#6b7280;padding:5px 0">Version</td><td>1.0.0-phase9</td></tr>' +
-        '<tr><td style="color:#6b7280;padding:5px 0">Backend</td><td>Node.js + Express + SQLite + MySQL</td></tr>' +
-        '<tr><td style="color:#6b7280;padding:5px 0">Driver App</td><td>Expo React Native</td></tr>' +
+        '<tr><td style="color:#6b7280;padding:5px 0;width:160px">Platform</td><td>Drive v2.2.0</td></tr>' +
+        '<tr><td style="color:#6b7280;padding:5px 0">Storage</td><td>Firebase Firestore</td></tr>' +
+        '<tr><td style="color:#6b7280;padding:5px 0">Driver App</td><td>Android (Kotlin + Compose)</td></tr>' +
         '<tr><td style="color:#6b7280;padding:5px 0">Maps</td><td>Leaflet + OpenStreetMap</td></tr>' +
-        '<tr><td style="color:#6b7280;padding:5px 0">Routing</td><td>VROOM + OSRM</td></tr>' +
         '<tr><td style="color:#6b7280;padding:5px 0">Geocoding</td><td>Nominatim</td></tr>' +
+        '<tr><td style="color:#6b7280;padding:5px 0">Deployed</td><td>GitHub Pages → berlinkitchen123-blip/Routing</td></tr>' +
       '</tbody></table>' +
     '</div>' +
     '</div>';
@@ -6364,10 +6374,19 @@ async function saveProcessConfig() {
     late_alert_threshold_min: document.getElementById('cfg-lat').value,
     gps_offline_threshold_min: document.getElementById('cfg-gps').value,
     alert_email: document.getElementById('cfg-email').value,
+    savedAt: new Date().toISOString(),
   };
-  const r = await fetch(`${API_BASE}/api/process-config`,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(updates)});
-  const d = await r.json();
-  if(d.ok) { processConfig={...processConfig,...updates}; alert('Process configuration saved!'); }
+  try {
+    if (API_BASE) {
+      const r = await fetch(`${API_BASE}/api/process-config`,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(updates)});
+      const d = await r.json();
+      if(!d.ok) throw new Error(d.error||'API error');
+    } else if (window._fbReady && window._fbDb) {
+      await window._fbSetDoc(window._fbDoc(window._fbDb, 'config', 'processConfig'), updates);
+    }
+    processConfig = {...processConfig, ...updates};
+    alert('✅ Process configuration saved to Firebase!');
+  } catch(e) { alert('Save error: ' + e.message); }
 }
 
 async function saveDepotConfig() {
@@ -6378,10 +6397,18 @@ async function saveDepotConfig() {
     berlin_depot_address: document.getElementById('cfg-ba').value,
     berlin_depot_lat: document.getElementById('cfg-blat').value,
     berlin_depot_lng: document.getElementById('cfg-blng').value,
+    savedAt: new Date().toISOString(),
   };
-  await fetch(`${API_BASE}/api/process-config`,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(updates)});
-  processConfig={...processConfig,...updates};
-  alert('Depot configuration saved!');
+  try {
+    if (API_BASE) {
+      await fetch(`${API_BASE}/api/process-config`,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(updates)});
+    } else if (window._fbReady && window._fbDb) {
+      const { setDoc: _sd } = await import('https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js');
+      await window._fbSetDoc(window._fbDoc(window._fbDb, 'config', 'depotConfig'), updates);
+    }
+    processConfig = {...processConfig, ...updates};
+    alert('✅ Depot configuration saved to Firebase!');
+  } catch(e) { alert('Save error: ' + e.message); }
 }
 
 function saveApiBase() {
