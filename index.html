@@ -418,8 +418,6 @@ const PAGE_TITLES = {
 let leafletMap = null;
 let zipMap = null;
 let dashboardTab = 'All';
-let rpTab = 'Today';
-let selectedPlan = null;
 let ordersFilter = {status:'all',kitchen:'all',search:'',courier:'all',date:new Date().toISOString().split('T')[0]};
 let ordersData = [];
 let ordersLoading = false;
@@ -1904,6 +1902,16 @@ async function renderDispatch(selectedDate) {
         '</div>' +
         '<div style="font-size:11px;color:#6b7280;margin-bottom:8px">'+done+' / '+total+' delivered ('+pct+'%)</div>' +
         '<div style="display:flex;gap:8px;flex-wrap:wrap">' +
+        (()=>{
+          const kitchenStop = stops.find(s=>(s.company||'').toLowerCase().includes('berlin kitchen'));
+          const kitchenHtml = kitchenStop ? '<div style="background:#fef9c3;border:1px solid #fde68a;border-radius:6px;padding:6px 10px;font-size:11px;min-width:120px;width:100%">' +
+            '<div style="font-weight:600">🏠 Kitchen Pickup</div>' +
+            '<div style="color:#6b7280">'+(kitchenStop.liveStatus==='DELIVERED'?'Picked up ✅':'Scheduled pickup')+'</div>' +
+            '<div style="color:#92400e;font-size:10px">Time: '+(kitchenStop.time||kitchenStop.match?.time||'09:30')+'</div>' +
+            (kitchenStop.match?.proofTimestamp?'<div style="color:#16a34a;font-size:10px">Left: '+new Date(kitchenStop.match.proofTimestamp).toLocaleTimeString('de-DE',{hour:'2-digit',minute:'2-digit'})+'</div>':'') +
+          '</div>' : '';
+          return kitchenHtml;
+        })() +
         stops.map(s => {
           const st = s.liveStatus;
           const bg = st==='DELIVERED'?'#f0fdf4':st==='ARRIVED'||st==='SCANNED'?'#eff6ff':'#f9fafb';
@@ -3215,96 +3223,151 @@ function _updateTrialMapMarkers(progress) {
 // ============================================================
 // ROUTE PLANS
 // ============================================================
-function renderRoutePlans() {
-  document.getElementById('content').innerHTML =
+// Route Plans state
+let _rpDate = new Date().toLocaleDateString('en-CA'); // yyyy-mm-dd
+let _rpCity = 'Berlin';
+window._rpCity = 'Berlin';
+window._rpDate = new Date().toLocaleDateString('en-CA');
+
+async function renderRoutePlans() {
+  const c = document.getElementById('content');
+  c.innerHTML = '<div class="page"><div style="padding:40px;text-align:center;color:#9ca3af">Loading route plans…</div></div>';
+  if(!window._fbReady || !window._fbDb) return;
+
+  const { getDocs, collection: fbColl, query: fbQ, where: fbW, orderBy: fbOB } = window._firestoreModules || {};
+  if(!getDocs) return;
+
+  // Sync window state back to local vars
+  _rpDate = window._rpDate || _rpDate;
+  _rpCity = window._rpCity || _rpCity;
+
+  // Load deliveries for selected date
+  const snap = await getDocs(fbQ(fbColl(window._fbDb,'deliveries'), fbW('date','==',_rpDate), fbW('kitchen','==',_rpCity)));
+  const deliveries = snap.docs.map(d=>({id:d.id,...d.data()}));
+
+  // Group by driver
+  const byDriver = {};
+  deliveries.forEach(d => {
+    const dr = d.driverName || d.driverId || 'Unknown';
+    if(!byDriver[dr]) byDriver[dr] = [];
+    byDriver[dr].push(d);
+  });
+
+  const total = deliveries.length;
+  const delivered = deliveries.filter(d=>d.status==='DELIVERED').length;
+  const COLORS = ['#e85d04','#3b82f6','#10b981','#8b5cf6','#f59e0b','#ef4444','#06b6d4','#ec4899'];
+
+  c.innerHTML =
   '<div class="page">' +
-  '<div class="page-header"><h2>Route Plans</h2><p>Manage and monitor route calculations</p></div>' +
-  '<div class="tabs">' +
-  ['Today','Yesterday','Days Ahead'].map(t=>'<div class="tab'+(rpTab===t?' active':'')+'" onclick="setRPTab(\''+t+'\')">'+t+'</div>').join('') +
+  // Header with calendar and city toggle
+  '<div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px;margin-bottom:18px">' +
+    '<div><h2 style="font-size:22px;font-weight:700;margin:0">🗺️ Route Plans</h2>' +
+    '<p style="color:#6b7280;font-size:13px;margin:4px 0 0">'+_rpCity+' · '+_rpDate+' · '+total+' stops · '+delivered+' delivered</p></div>' +
+    '<div style="display:flex;gap:8px;align-items:center">' +
+      '<div style="display:flex;gap:0;border:1px solid #e5e7eb;border-radius:8px;overflow:hidden">' +
+        ['Berlin','Munich'].map(city=>'<button onclick="window._rpCity=\''+city+'\';renderRoutePlans()" style="padding:6px 16px;font-size:13px;font-weight:600;border:none;cursor:pointer;background:'+(city===_rpCity?'#1a1a2e':'#fff')+';color:'+(city===_rpCity?'#fff':'#374151')+'">'+city+'</button>').join('') +
+      '</div>' +
+      '<input type="date" value="'+_rpDate+'" onchange="window._rpDate=this.value;renderRoutePlans()" style="border:1px solid #e5e7eb;border-radius:8px;padding:6px 12px;font-size:13px">' +
+    '</div>' +
   '</div>' +
-  (selectedPlan!==null?renderRPDetail(selectedPlan):renderRPTable()) +
+  // Summary bar
+  '<div style="display:flex;gap:12px;margin-bottom:18px;flex-wrap:wrap">' +
+    '<div style="background:#f0fdf4;border:1px solid #bbf7d0;border-radius:8px;padding:8px 16px;font-size:13px;font-weight:600;color:#166534">✅ Delivered: '+delivered+'</div>' +
+    '<div style="background:#fef9c3;border:1px solid #fde68a;border-radius:8px;padding:8px 16px;font-size:13px;font-weight:600;color:#92400e">⏳ Pending: '+(total-delivered)+'</div>' +
+    '<div style="background:#f3f4f6;border:1px solid #e5e7eb;border-radius:8px;padding:8px 16px;font-size:13px;font-weight:600;color:#374151">🚗 Couriers: '+Object.keys(byDriver).length+'</div>' +
+  '</div>' +
+  // Driver cards
+  (Object.keys(byDriver).length === 0
+    ? '<div style="text-align:center;padding:60px;color:#9ca3af">No route data for '+_rpDate+' ('+_rpCity+'). Lock a plan first.</div>'
+    : Object.entries(byDriver).map(([driver, stops], dIdx) => {
+        const dDel = stops.filter(s=>s.status==='DELIVERED').length;
+        const dTot = stops.length;
+        const dPct = dTot ? Math.round(dDel/dTot*100) : 0;
+        const color = COLORS[dIdx%COLORS.length];
+        const sortedStops = stops.sort((a,b)=>(a.routeOrder||a.sequence||0)-(b.routeOrder||b.sequence||0));
+        // Find Berlin Kitchen stop
+        const kitchenStop = sortedStops.find(s=>s.companyName?.toLowerCase().includes('berlin kitchen') || s.address?.toLowerCase().includes('berlin kitchen'));
+        return '<div style="background:#fff;border:1px solid #e5e7eb;border-radius:12px;margin-bottom:14px;overflow:hidden">' +
+          // Driver header
+          '<div onclick="toggleRP('+dIdx+')" style="display:flex;align-items:center;gap:12px;padding:14px 18px;cursor:pointer;background:#fafafa">' +
+            '<div style="width:44px;height:44px;border-radius:50%;background:'+color+'20;color:'+color+';display:flex;align-items:center;justify-content:center;font-size:18px;font-weight:800">'+driver.split('@')[0].substring(0,2).toUpperCase()+'</div>' +
+            '<div style="flex:1">' +
+              '<div style="font-weight:700;font-size:15px">'+driver.split('@')[0]+'</div>' +
+              '<div style="font-size:12px;color:#6b7280;margin-top:2px">'+dTot+' stops · '+dDel+' delivered · '+(kitchenStop?'Pickup: '+(kitchenStop.time||'09:30'):'')+'</div>' +
+              '<div style="background:#f3f4f6;border-radius:4px;height:6px;margin-top:6px;overflow:hidden"><div style="background:'+color+';height:6px;width:'+dPct+'%"></div></div>' +
+            '</div>' +
+            '<span id="rp-arrow-'+dIdx+'" style="color:#9ca3af;transition:transform 0.2s">▼</span>' +
+          '</div>' +
+          // Stops list
+          '<div id="rp-body-'+dIdx+'" style="display:none">' +
+            (kitchenStop ? '<div style="background:#fef9c3;border-bottom:1px solid #fde68a;padding:10px 18px;font-size:13px;display:flex;align-items:center;gap:10px">'+
+              '<span style="font-size:18px">🏠</span><div><div style="font-weight:600">Kitchen Pickup</div><div style="color:#92400e;font-size:12px">'+kitchenStop.address+' · Scheduled '+kitchenStop.time+'</div></div>'+
+              '<span style="margin-left:auto;font-size:11px;background:'+(kitchenStop.status==='DELIVERED'?'#d1fae5':'#fef3c7')+';color:'+(kitchenStop.status==='DELIVERED'?'#065f46':'#92400e')+';padding:2px 8px;border-radius:8px">'+(kitchenStop.status==='DELIVERED'?'✅ Picked up':'⏳ Pending')+'</span>'+
+            '</div>' : '') +
+            sortedStops.filter(s=>!s.companyName?.toLowerCase().includes('berlin kitchen')&&!s.address?.toLowerCase().includes('berlin kitchen'))
+            .map((stop, sIdx) => {
+              const st = (stop.status||'PENDING').toUpperCase();
+              const stColor = st==='DELIVERED'?'#16a34a':st==='FAILED'?'#dc2626':'#9ca3af';
+              const stBg = st==='DELIVERED'?'#f0fdf4':st==='FAILED'?'#fef2f2':'#f9fafb';
+              const stIcon = st==='DELIVERED'?'✅':st==='FAILED'?'❌':'⏳';
+              const proofTs = stop.proofTimestamp ? new Date(stop.proofTimestamp).toLocaleTimeString('de-DE',{hour:'2-digit',minute:'2-digit'}) : '';
+              return '<div style="border-bottom:1px solid #f3f4f6">' +
+                '<div onclick="toggleRPStop(\''+dIdx+'_'+sIdx+'\')" style="display:flex;align-items:center;gap:10px;padding:10px 18px;cursor:pointer;background:'+stBg+'">' +
+                  '<div style="width:26px;height:26px;border-radius:50%;background:'+color+'30;color:'+color+';display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;flex-shrink:0">'+(sIdx+1)+'</div>' +
+                  '<div style="flex:1;min-width:0">' +
+                    '<div style="font-weight:600;font-size:13px">'+stop.companyName+'</div>' +
+                    '<div style="font-size:11px;color:#6b7280;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">'+stop.address+(stop.postalCode?' · '+stop.postalCode:'')+'</div>' +
+                  '</div>' +
+                  '<div style="text-align:right;flex-shrink:0">' +
+                    '<div style="font-size:11px;color:'+stColor+';font-weight:600">'+stIcon+' '+(st==='DELIVERED'?'Delivered':st==='FAILED'?'Failed':'Pending')+'</div>' +
+                    (stop.time?'<div style="font-size:11px;color:#6b7280">'+stop.time+'</div>':'') +
+                    (proofTs?'<div style="font-size:10px;color:#16a34a">'+proofTs+'</div>':'') +
+                  '</div>' +
+                  '<span id="rpstop-arrow-'+dIdx+'_'+sIdx+'" style="color:#9ca3af;font-size:10px;margin-left:4px;transition:transform 0.2s">▶</span>' +
+                '</div>' +
+                // Stop detail panel
+                '<div id="rpstop-body-'+dIdx+'_'+sIdx+'" style="display:none;background:#fff;padding:14px 18px 14px 52px;border-top:1px solid #f3f4f6;font-size:13px">' +
+                  '<table style="width:100%">' +
+                    '<tr><td style="color:#6b7280;padding:3px 0;width:120px">Order ID</td><td><code style="font-size:11px;background:#f3f4f6;padding:1px 5px;border-radius:3px">'+stop.id+'</code></td></tr>' +
+                    '<tr><td style="color:#6b7280;padding:3px 0">QR Code</td><td><code style="font-size:11px;background:#f3f4f6;padding:1px 5px;border-radius:3px">'+(stop.qrCode||'—')+'</code></td></tr>' +
+                    '<tr><td style="color:#6b7280;padding:3px 0">Company</td><td><b>'+stop.companyName+'</b></td></tr>' +
+                    '<tr><td style="color:#6b7280;padding:3px 0">Address</td><td>'+stop.address+(stop.postalCode?' · '+stop.postalCode:'')+'</td></tr>' +
+                    (stop.deliveryInstructions?'<tr><td style="color:#6b7280;padding:3px 0">Instructions</td><td>'+stop.deliveryInstructions+'</td></tr>':'') +
+                    '<tr><td style="color:#6b7280;padding:3px 0">Boxes</td><td>'+stop.numberOfBoxes+'</td></tr>' +
+                    '<tr><td style="color:#6b7280;padding:3px 0">Status</td><td>'+badge((stop.status||'pending').toLowerCase())+'</td></tr>' +
+                    (stop.proofType?'<tr><td style="color:#6b7280;padding:3px 0">Proof</td><td>'+stop.proofType+'</td></tr>':'') +
+                    (proofTs?'<tr><td style="color:#6b7280;padding:3px 0">Delivered at</td><td style="color:#16a34a;font-weight:600">'+proofTs+'</td></tr>':'') +
+                    (stop.proofImageUrl?'<tr><td style="color:#6b7280;padding:3px 0">Photo</td><td><img src="'+stop.proofImageUrl+'" style="max-width:160px;border-radius:6px;border:1px solid #e5e7eb" onerror="this.style.display=\'none\'"/></td></tr>':'') +
+                  '</table>' +
+                  '<div style="margin-top:10px;display:flex;gap:8px">' +
+                    '<button class="btn btn-sm" onclick="openOD(\''+stop.id+'\',\'app\')">📋 Full Detail</button>' +
+                  '</div>' +
+                '</div>' +
+              '</div>';
+            }).join('') +
+          '</div>' +
+        '</div>';
+      }).join('')
+  ) +
   '</div>';
 }
 
-function setRPTab(t){rpTab=t;selectedPlan=null;renderRoutePlans();}
-
-function renderRPTable() {
-  return '<div class="table-wrap"><table>' +
-  '<thead><tr><th>Date</th><th>Plan ID</th><th>Routing</th><th>Description</th><th>Status</th><th>Routes</th><th>Orders</th><th>Utilization</th><th>Window</th><th>Calc At</th></tr></thead>' +
-  '<tbody>' +
-  ROUTE_PLANS.filter(p=>p.status!=='failed').map((p,i)=>'<tr onclick="selPlan('+i+')">' +
-  '<td>'+p.date+'</td>' +
-  '<td><code style="font-family:monospace;font-size:12px;background:#f3f4f6;padding:2px 6px;border-radius:4px">'+p.id+'</code></td>' +
-  '<td>'+p.routing+'</td><td>'+p.desc+'</td>' +
-  '<td>'+badge(p.status)+'</td>' +
-  '<td>'+p.routes+'</td><td>'+p.orders+'</td>' +
-  '<td style="font-size:12px">'+p.util1+' / '+p.util2+'</td>' +
-  '<td>'+p.window+'</td><td>'+p.calcAt+'</td>' +
-  '</tr>').join('') +
-  '</tbody></table></div>';
+function toggleRP(idx) {
+  const body = document.getElementById('rp-body-'+idx);
+  const arrow = document.getElementById('rp-arrow-'+idx);
+  if(!body) return;
+  const open = body.style.display !== 'none';
+  body.style.display = open ? 'none' : 'block';
+  if(arrow) arrow.style.transform = open ? '' : 'rotate(180deg)';
 }
 
-function selPlan(i){selectedPlan=i;renderRoutePlans();}
-
-function renderRPDetail(idx) {
-  const p = ROUTE_PLANS[idx];
-  const routes = MUNICH_ROUTES.slice(0,Math.min(p.routes,MUNICH_ROUTES.length)).map((r,i)=>Object.assign({},r,{routeNum:i+1}));
-  return '<button class="btn btn-sm" onclick="selectedPlan=null;renderRoutePlans()" style="margin-bottom:14px">&larr; Back to list</button>' +
-  '<div style="display:flex;align-items:center;gap:12px;margin-bottom:16px;flex-wrap:wrap">' +
-  '<h2 style="font-size:20px;font-weight:600">'+p.id+'</h2>' +
-  '<span style="color:#6b7280">'+p.date+'</span>' +
-  badge(p.status) +
-  '<span style="color:#9ca3af">'+p.routing+'</span>' +
-  '<div style="margin-left:auto;display:flex;gap:8px">' +
-  '<button class="btn btn-sm" onclick="window.location.hash=\'#orders\'">📦 Orders</button>' +
-  '<button class="btn btn-sm" onclick="window.location.hash=\'#routings\'">🛣️ Routings</button>' +
-  '<button class="btn btn-sm" onclick="window.location.hash=\'#schedules\'">⏱️ Schedules</button>' +
-  '</div></div>' +
-  '<div class="grid-auto" style="margin-bottom:16px">' +
-  '<div class="stat-card"><div class="stat-label">Orders</div><div class="stat-value">'+p.orders+'</div></div>' +
-  '<div class="stat-card"><div class="stat-label">Routes</div><div class="stat-value">'+p.routes+'</div></div>' +
-  '<div class="stat-card"><div class="stat-label">Utilization</div><div class="stat-value">'+p.util2+'</div></div>' +
-  '<div class="stat-card"><div class="stat-label">Unserved</div><div class="stat-value" style="color:#dc2626">2</div></div>' +
-  '<div class="stat-card"><div class="stat-label">Distance</div><div class="stat-value">342 km</div></div>' +
-  '<div class="stat-card"><div class="stat-label">Est. Cost</div><div class="stat-value">€1,240</div></div>' +
-  '</div>' +
-  '<div class="tabs"><div class="tab active" onclick="this.classList.add(\'active\');this.nextElementSibling.classList.remove(\'active\')">Calculation</div><div class="tab" onclick="this.classList.add(\'active\');this.previousElementSibling.classList.remove(\'active\')">Execution</div></div>' +
-  '<div style="display:flex;flex-direction:column;gap:10px">' +
-  routes.map((r,i)=>mkPlanCard(r,i)).join('') +
-  '</div>';
-}
-
-function mkPlanCard(r,i) {
-  const stops = genStops(r);
-  return '<div class="route-card">' +
-  '<div class="route-card-header" onclick="togglePC('+i+')">' +
-  '<div class="route-badge" style="background:'+r.color+';color:#fff">'+r.routeNum+'</div>' +
-  '<div class="courier-info">' +
-  '<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">' +
-  '<span class="courier-name">Route '+r.routeNum+' &mdash; '+r.name+'</span>' +
-  '<span class="badge badge-blue">'+r.stops+' stops</span>' +
-  '<span class="badge badge-gray">'+r.weight+'kg</span>' +
-  '</div>' +
-  '<div class="courier-meta">'+r.start+' &rarr; '+r.end+' &bull; Caddy</div>' +
-  '</div>' +
-  '<span id="pc-arrow-'+i+'" style="color:#9ca3af;font-size:11px">&#9660;</span>' +
-  '</div>' +
-  '<div class="route-card-body" id="pc-body-'+i+'">' +
-  '<div style="padding:10px 14px;background:#f9fafb;border-bottom:1px solid #f3f4f6;font-size:13px;display:flex;gap:16px;flex-wrap:wrap">' +
-  '<span>Courier: <b>'+r.name+'</b> <button class="btn btn-sm" style="margin-left:4px" onclick="openChangeCourierModal(\''+r.name+'\','+i+')">Change</button></span>' +
-  '<span>Vehicle: <b>Caddy</b></span>' +
-  '<span>Payload: <b>'+Math.round(r.weight*0.9)+'kg</b></span>' +
-  '</div>' +
-  '<table style="width:100%"><thead><tr><th>Order ID</th><th>Calc. Time</th><th>Company</th><th>Address</th><th>Packages</th></tr></thead><tbody>' +
-  stops.map((s,j)=>'<tr onclick="void(0)"><td style="font-family:monospace;font-size:12px">BB-'+String(1000+j+i*10).padStart(6,'0')+'</td><td>'+s.eta+'</td><td>'+s.company+'</td><td style="font-size:12px;color:#6b7280">'+s.address+'</td><td>'+s.boxes+'</td></tr>').join('') +
-  '</tbody></table></div></div>';
-}
-
-function togglePC(i) {
-  const b = document.getElementById('pc-body-'+i);
-  const a = document.getElementById('pc-arrow-'+i);
-  b.classList.toggle('open');
-  a.style.transform = b.classList.contains('open')?'rotate(180deg)':'';
+function toggleRPStop(key) {
+  const body = document.getElementById('rpstop-body-'+key);
+  const arrow = document.getElementById('rpstop-arrow-'+key);
+  if(!body) return;
+  const open = body.style.display !== 'none';
+  body.style.display = open ? 'none' : 'block';
+  if(arrow) arrow.style.transform = open ? '' : 'rotate(90deg)';
 }
 
 // ============================================================
@@ -3511,24 +3574,51 @@ function _paintOrders() {
     '<input type="text" placeholder="🔍 Search company, address, ID…" value="'+ordersFilter.search+'" oninput="ordersFilter.search=this.value;renderOrders()" style="flex:1;min-width:160px">' +
     '<button class="btn btn-sm" onclick="ordersFilter={status:\'all\',kitchen:\'all\',search:\'\',courier:\'all\',date:ordersFilter.date};renderOrders()">Clear</button>' +
   '</div>' +
-  '<div class="table-wrap"><table>' +
-  '<thead><tr><th>#</th><th>ID</th><th>Company</th><th>Address</th><th>Window</th><th>ETA</th><th>Status</th><th>Courier</th><th>Boxes</th><th>Source</th></tr></thead>' +
-  '<tbody>' +
-  all.map((o,i)=>'<tr onclick="openOD(\''+o.orderId+'\',\''+o.source+'\')" style="cursor:pointer">' +
-    '<td style="color:#9ca3af;font-size:12px">'+(i+1)+'</td>' +
-    '<td><code style="font-size:11px;background:#f3f4f6;padding:1px 5px;border-radius:3px">'+
-      (o.tiramizooId||o.orderId.substring(0,12))+'</code></td>' +
-    '<td><b style="font-size:13px">'+o.companyName+'</b></td>' +
-    '<td style="color:#6b7280;font-size:12px">'+o.address+(o.postCode?' · '+o.postCode:'')+'</td>' +
-    '<td style="font-size:12px;white-space:nowrap">'+(o.windowStart&&o.windowEnd?o.windowStart+'–'+o.windowEnd:'—')+'</td>' +
-    '<td style="font-size:12px;white-space:nowrap;color:'+(o.isLate?'#dc2626':'#374151')+'">'+
-      (o.eta||'—')+(o.isLate?' ⚠️':'')+'</td>' +
-    '<td>'+badge(o.status)+'</td>' +
-    '<td style="font-size:13px">'+o.courierName+'</td>' +
-    '<td style="text-align:center">'+o.boxCount+'</td>' +
-    '<td><span class="badge '+(o.source==='imported'?'badge-blue':'badge-gray')+'" style="font-size:11px">'+o.source+'</span></td>' +
-  '</tr>').join('') +
-  '</tbody></table></div></div>';
+  (()=>{
+    const groupedOrders = {};
+    all.forEach(o => {
+      const k = o.courierName || 'Unassigned';
+      if(!groupedOrders[k]) groupedOrders[k] = [];
+      groupedOrders[k].push(o);
+    });
+    return (Object.keys(groupedOrders).length === 0
+      ? '<div style="text-align:center;padding:40px;color:#9ca3af">No orders found for these filters.</div>'
+      : Object.entries(groupedOrders).map(([courier, orders], gIdx) => {
+          const gDel = orders.filter(o=>o.status==='delivered').length;
+          return '<div style="background:#fff;border:1px solid #e5e7eb;border-radius:10px;margin-bottom:12px;overflow:hidden">' +
+            '<div onclick="toggleOrderGroup('+gIdx+')" style="display:flex;align-items:center;gap:12px;padding:12px 16px;cursor:pointer;background:#fafafa">' +
+              '<div style="width:36px;height:36px;border-radius:50%;background:#e0f2fe;color:#0369a1;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:14px">'+courier.split('@')[0].substring(0,2).toUpperCase()+'</div>' +
+              '<div style="flex:1"><div style="font-weight:700">'+courier.split('@')[0]+'</div><div style="font-size:12px;color:#6b7280">'+orders.length+' stops · '+gDel+' delivered</div></div>' +
+              '<span id="og-arrow-'+gIdx+'" style="color:#9ca3af;transition:transform 0.2s">▼</span>' +
+            '</div>' +
+            '<div id="og-body-'+gIdx+'">' +
+            '<div class="table-wrap"><table>' +
+            '<thead><tr><th>#</th><th>ID</th><th>Company</th><th>Address</th><th>Time</th><th>Status</th><th>Boxes</th></tr></thead>' +
+            '<tbody>' +
+            orders.map((o,i)=>'<tr onclick="openOD(\''+o.orderId+'\',\''+o.source+'\')" style="cursor:pointer">' +
+              '<td style="color:#9ca3af;font-size:12px">'+(i+1)+'</td>' +
+              '<td><code style="font-size:11px;background:#f3f4f6;padding:1px 5px;border-radius:3px">'+(o.tiramizooId||o.orderId.substring(0,12))+'</code></td>' +
+              '<td><b style="font-size:13px">'+o.companyName+'</b></td>' +
+              '<td style="color:#6b7280;font-size:12px">'+o.address+(o.postCode?' · '+o.postCode:'')+'</td>' +
+              '<td style="font-size:12px;white-space:nowrap">'+(o.time||'—')+'</td>' +
+              '<td>'+badge(o.status)+'</td>' +
+              '<td style="text-align:center">'+o.boxCount+'</td>' +
+            '</tr>').join('') +
+            '</tbody></table></div></div>' +
+          '</div>';
+        }).join('')
+    ) +
+  '</div>';
+  })()
+}
+
+function toggleOrderGroup(idx) {
+  const b = document.getElementById('og-body-'+idx);
+  const a = document.getElementById('og-arrow-'+idx);
+  if(!b) return;
+  const open = b.style.display === 'none' || b.style.display === '';
+  b.style.display = open ? 'block' : 'none';
+  if(a) a.style.transform = open ? 'rotate(180deg)' : '';
 }
 
 async function openOD(orderId, source) {
@@ -4781,10 +4871,33 @@ async function renderZipCodes() {
 
   // Load API data then init map
   try {
-    const r = await fetch(`${API_BASE}/api/zip-codes/stats?date=${zipDate}&kitchen=${zipKitchen}`);
-    const d = await r.json();
-    zipZones = d.zones || [];
-    _paintZipTable(zipZones, d);
+    if(!API_BASE && window._fbDb) {
+      const { getDocs, collection: fbColl, query: fbQ, where: fbW } = window._firestoreModules || {};
+      if(getDocs) {
+        const snap = await getDocs(fbQ(fbColl(window._fbDb,'deliveries'), fbW('date','==',zipDate), fbW('kitchen','==',zipKitchen)));
+        const deliveries = snap.docs.map(d=>({...d.data()}));
+        // Group by postal code
+        const byZip = {};
+        deliveries.forEach(d => {
+          const zip = d.postalCode || 'Unknown';
+          if(!byZip[zip]) byZip[zip] = { postalCode: zip, city: d.city||'', total:0, delivered:0, lat:d.lat||null, lng:d.lng||null, serviceTimeS:0 };
+          byZip[zip].total++;
+          if(d.status==='DELIVERED') byZip[zip].delivered++;
+          if(d.lat && !byZip[zip].lat) { byZip[zip].lat = d.lat; byZip[zip].lng = d.lng; }
+          byZip[zip].serviceTimeS += 600; // 10 min default service time
+        });
+        zipZones = Object.values(byZip).sort((a,b)=>b.total-a.total);
+        _paintZipTable(zipZones, {total: deliveries.length});
+      }
+    } else if(API_BASE) {
+      const r = await fetch(`${API_BASE}/api/zip-codes/stats?date=${zipDate}&kitchen=${zipKitchen}`);
+      const d = await r.json();
+      zipZones = d.zones || [];
+      _paintZipTable(zipZones, d);
+    } else {
+      zipZones = [];
+      _paintZipTable([], {total:0});
+    }
   } catch(e) {
     zipZones = [];
   }
