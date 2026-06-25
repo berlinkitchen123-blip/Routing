@@ -380,6 +380,7 @@ const NAV_ITEMS = [
   {hash:'#closures',label:'Closures',icon:'🚫'},
   {hash:'#companies',label:'Companies',icon:'🏢'},
   {hash:'#alerts',label:'Alerts',icon:'🔔'},
+  {hash:'#reports',label:'Reports',icon:'📊'},
   {hash:'#analytics',label:'Analytics',icon:'📈'},
   {hash:'#senders',label:'Senders',icon:'📤'},
   {hash:'#price-lists',label:'Price Lists',icon:'💶'},
@@ -470,6 +471,7 @@ function route() {
     case '#closures': renderClosures(); break;
     case '#companies': renderCompanies(); break;
     case '#alerts': renderAlerts(); break;
+    case '#reports':   renderReports(); break;
     case '#analytics': renderAnalytics(); break;
     case '#senders': renderSenders(); break;
     case '#price-lists': renderPriceLists(); break;
@@ -6655,6 +6657,287 @@ function printAllPartnerPdfs(date) {
   ['Ali & Jozef','Samir','Packator Fleet','Mykhailo'].forEach((p,i) => {
     setTimeout(() => printPartnerPdf(p, date), i * 500);
   });
+}
+
+// ── Reports Page ─────────────────────────────────────────────────────────────
+async function renderReports() {
+  const c = document.getElementById('content');
+  const todayISO = new Date().toLocaleDateString('sv-SE', {timeZone:'Europe/Berlin'});
+  // Default range: last 14 days
+  const d14 = new Date(); d14.setDate(d14.getDate() - 13);
+  const fromISO = d14.toLocaleDateString('sv-SE', {timeZone:'Europe/Berlin'});
+
+  c.innerHTML =
+    '<div class="page">' +
+    '<div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:20px">' +
+      '<div><h2 style="font-size:22px;font-weight:700;margin:0">📊 Delivery Reports</h2>' +
+      '<p style="color:#6b7280;font-size:13px;margin:4px 0 0">Auto-calculated from live Firestore data</p></div>' +
+      '<div style="display:flex;gap:8px;align-items:center;margin-left:auto;flex-wrap:wrap">' +
+        '<label style="font-size:13px;color:#6b7280">From</label>' +
+        '<input type="date" id="rep-from" value="'+fromISO+'" style="border:1px solid #d1d5db;border-radius:7px;padding:6px 10px;font-size:13px"/>' +
+        '<label style="font-size:13px;color:#6b7280">To</label>' +
+        '<input type="date" id="rep-to" value="'+todayISO+'" style="border:1px solid #d1d5db;border-radius:7px;padding:6px 10px;font-size:13px"/>' +
+        '<button class="btn btn-primary" onclick="_runReports()">🔍 Load</button>' +
+        '<button class="btn" onclick="_exportReportsCsv()" style="background:#059669;color:#fff;border-color:#059669">⬇ Export CSV</button>' +
+      '</div>' +
+    '</div>' +
+    '<div id="rep-body"><div style="padding:60px;text-align:center;color:#9ca3af">Select a date range and click Load.</div></div>' +
+    '</div>';
+
+  window._runReports = async function() {
+    const from = document.getElementById('rep-from').value;
+    const to   = document.getElementById('rep-to').value;
+    const body = document.getElementById('rep-body');
+    if(!from||!to){ alert('Select both dates.'); return; }
+    body.innerHTML = '<div style="padding:60px;text-align:center;color:#9ca3af">Loading…</div>';
+
+    try {
+      const {getDocs,collection,query,where:W,orderBy:OB} = _firestoreModules;
+
+      // Load all deliveries in range
+      const snap = await getDocs(query(
+        collection(_fbDb,'deliveries'),
+        W('date','>=',from), W('date','<=',to)
+      ));
+      const all = snap.docs.map(d=>({id:d.id,...d.data()}));
+      if(!all.length){
+        body.innerHTML='<div style="padding:60px;text-align:center;color:#6b7280">No deliveries found for this range.</div>';
+        return;
+      }
+
+      // ── Aggregate ────────────────────────────────────────────────────────
+      const STATUS_DONE = s => ['DELIVERED','delivered'].includes(s);
+      const STATUS_FAIL = s => ['FAILED','failed','DELIVERY_FAILED'].includes(s);
+
+      const totalStops  = all.length;
+      const delivered   = all.filter(d=>STATUS_DONE(d.status)).length;
+      const failed      = all.filter(d=>STATUS_FAIL(d.status)).length;
+      const pending     = all.filter(d=>!STATUS_DONE(d.status)&&!STATUS_FAIL(d.status)).length;
+      const totalBoxes  = all.reduce((s,d)=>s+(d.numberOfBoxes||1),0);
+      const successRate = totalStops ? Math.round(delivered/totalStops*100) : 0;
+      const failRate    = totalStops ? Math.round(failed/totalStops*100) : 0;
+
+      // Proof of delivery rate
+      const withProof   = all.filter(d=>d.proofImageUrl||d.signatureImageUrl||d.hasProof).length;
+      const proofRate   = delivered ? Math.round(withProof/delivered*100) : 0;
+
+      // ── Per-driver ───────────────────────────────────────────────────────
+      const driverMap = {};
+      all.forEach(d=>{
+        const drv = (d.driverId||d.driverName||'Unknown').split('@')[0];
+        if(!driverMap[drv]) driverMap[drv]={name:drv,stops:0,delivered:0,failed:0,boxes:0,dates:new Set(),withProof:0};
+        const dm = driverMap[drv];
+        dm.stops++;
+        dm.boxes += (d.numberOfBoxes||1);
+        if(d.date) dm.dates.add(d.date);
+        if(STATUS_DONE(d.status)){dm.delivered++;if(d.proofImageUrl||d.signatureImageUrl||d.hasProof)dm.withProof++;}
+        if(STATUS_FAIL(d.status)) dm.failed++;
+      });
+      const drivers = Object.values(driverMap).sort((a,b)=>b.stops-a.stops);
+
+      // ── Per-day trend ────────────────────────────────────────────────────
+      const dayMap = {};
+      all.forEach(d=>{
+        if(!d.date) return;
+        if(!dayMap[d.date]) dayMap[d.date]={date:d.date,stops:0,delivered:0,failed:0,boxes:0};
+        dayMap[d.date].stops++;
+        dayMap[d.date].boxes+=(d.numberOfBoxes||1);
+        if(STATUS_DONE(d.status)) dayMap[d.date].delivered++;
+        if(STATUS_FAIL(d.status)) dayMap[d.date].failed++;
+      });
+      const days = Object.values(dayMap).sort((a,b)=>a.date.localeCompare(b.date));
+
+      window._repData = {all, drivers, days, totalStops, delivered, failed, pending, totalBoxes, successRate, failRate, proofRate, withProof};
+
+      // ── Render ────────────────────────────────────────────────────────────
+      const rateColor = r => r>=90?'#16a34a':r>=70?'#d97706':'#dc2626';
+      const statCard = (icon,label,value,sub,color='#111')=>
+        '<div style="background:#fff;border:1px solid #e5e7eb;border-radius:12px;padding:18px 20px;min-width:140px">' +
+          '<div style="font-size:22px;margin-bottom:4px">'+icon+'</div>' +
+          '<div style="font-size:28px;font-weight:800;color:'+color+'">'+value+'</div>' +
+          '<div style="font-size:13px;font-weight:600;color:#374151;margin-top:2px">'+label+'</div>' +
+          (sub?'<div style="font-size:11px;color:#6b7280;margin-top:2px">'+sub+'</div>':'') +
+        '</div>';
+
+      body.innerHTML =
+        // ── Summary cards ──
+        '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:12px;margin-bottom:24px">' +
+          statCard('📦','Total Stops',totalStops,'in range') +
+          statCard('✅','Delivered',delivered,successRate+'% success rate',rateColor(successRate)) +
+          statCard('❌','Failed',failed,failRate+'% failure rate',failed>0?'#dc2626':'#16a34a') +
+          statCard('⏳','Pending / Active',pending,'not yet delivered') +
+          statCard('📫','Total Boxes',totalBoxes,'all drivers') +
+          statCard('📷','Proof Captured',withProof+'',proofRate+'% of deliveries','#1d4ed8') +
+        '</div>' +
+
+        // ── Trend chart ──
+        '<div style="background:#fff;border:1px solid #e5e7eb;border-radius:12px;padding:20px;margin-bottom:24px">' +
+          '<div style="font-size:15px;font-weight:700;margin-bottom:16px">📈 Daily Delivery Trend</div>' +
+          '<div style="position:relative;height:220px"><canvas id="rep-trend-chart"></canvas></div>' +
+        '</div>' +
+
+        // ── Driver performance table ──
+        '<div style="background:#fff;border:1px solid #e5e7eb;border-radius:12px;padding:20px;margin-bottom:24px">' +
+          '<div style="font-size:15px;font-weight:700;margin-bottom:16px">🚗 Driver Performance</div>' +
+          '<div style="overflow-x:auto">' +
+          '<table style="width:100%;border-collapse:collapse;font-size:13px">' +
+          '<thead><tr style="border-bottom:2px solid #e5e7eb">' +
+            '<th style="text-align:left;padding:8px 12px;color:#6b7280;font-weight:600">Driver</th>' +
+            '<th style="text-align:right;padding:8px 12px;color:#6b7280;font-weight:600">Days</th>' +
+            '<th style="text-align:right;padding:8px 12px;color:#6b7280;font-weight:600">Stops</th>' +
+            '<th style="text-align:right;padding:8px 12px;color:#6b7280;font-weight:600">Boxes</th>' +
+            '<th style="text-align:right;padding:8px 12px;color:#6b7280;font-weight:600">Delivered</th>' +
+            '<th style="text-align:right;padding:8px 12px;color:#6b7280;font-weight:600">Failed</th>' +
+            '<th style="text-align:right;padding:8px 12px;color:#6b7280;font-weight:600">Success %</th>' +
+            '<th style="text-align:right;padding:8px 12px;color:#6b7280;font-weight:600">Proof %</th>' +
+            '<th style="text-align:right;padding:8px 12px;color:#6b7280;font-weight:600">Boxes/Stop</th>' +
+          '</tr></thead><tbody>' +
+          drivers.map((drv,i)=>{
+            const sr = drv.stops ? Math.round(drv.delivered/drv.stops*100) : 0;
+            const pr = drv.delivered ? Math.round(drv.withProof/drv.delivered*100) : 0;
+            const bps = drv.stops ? (drv.boxes/drv.stops).toFixed(1) : '—';
+            const srColor = rateColor(sr);
+            return '<tr style="border-bottom:1px solid #f3f4f6;'+(i%2?'background:#fafafa':'')+'">' +
+              '<td style="padding:10px 12px;font-weight:600">' +
+                '<div style="display:flex;align-items:center;gap:8px">' +
+                  '<div style="width:30px;height:30px;border-radius:50%;background:#1d4ed8;color:#fff;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:12px;flex-shrink:0">'+drv.name.charAt(0).toUpperCase()+'</div>' +
+                  drv.name +
+                '</div>' +
+              '</td>' +
+              '<td style="text-align:right;padding:10px 12px;color:#6b7280">'+drv.dates.size+'</td>' +
+              '<td style="text-align:right;padding:10px 12px;font-weight:600">'+drv.stops+'</td>' +
+              '<td style="text-align:right;padding:10px 12px">'+drv.boxes+'</td>' +
+              '<td style="text-align:right;padding:10px 12px;color:#16a34a;font-weight:600">'+drv.delivered+'</td>' +
+              '<td style="text-align:right;padding:10px 12px;color:'+(drv.failed>0?'#dc2626':'#6b7280')+'">'+drv.failed+'</td>' +
+              '<td style="text-align:right;padding:10px 12px">' +
+                '<span style="background:'+srColor+'20;color:'+srColor+';border-radius:20px;padding:3px 10px;font-weight:700;font-size:12px">'+sr+'%</span>' +
+              '</td>' +
+              '<td style="text-align:right;padding:10px 12px;color:#1d4ed8;font-weight:600">'+pr+'%</td>' +
+              '<td style="text-align:right;padding:10px 12px;color:#6b7280">'+bps+'</td>' +
+            '</tr>';
+          }).join('') +
+          '</tbody></table></div></div>' +
+
+        // ── Daily breakdown table ──
+        '<div style="background:#fff;border:1px solid #e5e7eb;border-radius:12px;padding:20px">' +
+          '<div style="font-size:15px;font-weight:700;margin-bottom:16px">📅 Day-by-Day Breakdown</div>' +
+          '<div style="overflow-x:auto">' +
+          '<table style="width:100%;border-collapse:collapse;font-size:13px">' +
+          '<thead><tr style="border-bottom:2px solid #e5e7eb">' +
+            '<th style="text-align:left;padding:8px 12px;color:#6b7280;font-weight:600">Date</th>' +
+            '<th style="text-align:right;padding:8px 12px;color:#6b7280;font-weight:600">Stops</th>' +
+            '<th style="text-align:right;padding:8px 12px;color:#6b7280;font-weight:600">Boxes</th>' +
+            '<th style="text-align:right;padding:8px 12px;color:#6b7280;font-weight:600">Delivered</th>' +
+            '<th style="text-align:right;padding:8px 12px;color:#6b7280;font-weight:600">Failed</th>' +
+            '<th style="text-align:right;padding:8px 12px;color:#6b7280;font-weight:600">Pending</th>' +
+            '<th style="text-align:left;padding:8px 12px;color:#6b7280;font-weight:600">Success Rate</th>' +
+          '</tr></thead><tbody>' +
+          days.map((day,i)=>{
+            const pend = day.stops-day.delivered-day.failed;
+            const sr = day.stops ? Math.round(day.delivered/day.stops*100) : 0;
+            const barW = sr;
+            const barC = rateColor(sr);
+            const dateLabel = new Date(day.date+'T12:00:00').toLocaleDateString('de-DE',{weekday:'short',day:'2-digit',month:'short'});
+            return '<tr style="border-bottom:1px solid #f3f4f6;'+(i%2?'background:#fafafa':'')+'">' +
+              '<td style="padding:10px 12px;font-weight:600">'+dateLabel+'</td>' +
+              '<td style="text-align:right;padding:10px 12px">'+day.stops+'</td>' +
+              '<td style="text-align:right;padding:10px 12px;color:#6b7280">'+day.boxes+'</td>' +
+              '<td style="text-align:right;padding:10px 12px;color:#16a34a;font-weight:600">'+day.delivered+'</td>' +
+              '<td style="text-align:right;padding:10px 12px;color:'+(day.failed>0?'#dc2626':'#6b7280')+'">'+day.failed+'</td>' +
+              '<td style="text-align:right;padding:10px 12px;color:#d97706">'+pend+'</td>' +
+              '<td style="padding:10px 12px;min-width:160px">' +
+                '<div style="display:flex;align-items:center;gap:8px">' +
+                  '<div style="flex:1;height:8px;background:#f3f4f6;border-radius:4px;overflow:hidden">' +
+                    '<div style="width:'+barW+'%;height:100%;background:'+barC+';border-radius:4px"></div>' +
+                  '</div>' +
+                  '<span style="font-weight:700;color:'+barC+';min-width:34px;text-align:right">'+sr+'%</span>' +
+                '</div>' +
+              '</td>' +
+            '</tr>';
+          }).join('') +
+          '</tbody></table></div></div>';
+
+      // ── Draw trend chart ──────────────────────────────────────────────────
+      const ctx = document.getElementById('rep-trend-chart');
+      if(ctx && typeof Chart !== 'undefined') {
+        new Chart(ctx, {
+          type: 'bar',
+          data: {
+            labels: days.map(d=>new Date(d.date+'T12:00:00').toLocaleDateString('de-DE',{day:'2-digit',month:'short'})),
+            datasets: [
+              {
+                label: 'Delivered',
+                data: days.map(d=>d.delivered),
+                backgroundColor: '#16a34a',
+                borderRadius: 4,
+                stack: 'a'
+              },
+              {
+                label: 'Failed',
+                data: days.map(d=>d.failed),
+                backgroundColor: '#dc2626',
+                borderRadius: 4,
+                stack: 'a'
+              },
+              {
+                label: 'Pending',
+                data: days.map(d=>d.stops-d.delivered-d.failed),
+                backgroundColor: '#f59e0b',
+                borderRadius: 4,
+                stack: 'a'
+              }
+            ]
+          },
+          options: {
+            responsive: true, maintainAspectRatio: false,
+            plugins: {
+              legend: {position:'top', labels:{boxWidth:12,font:{size:12}}},
+              tooltip: {
+                callbacks: {
+                  afterBody: items => {
+                    const idx = items[0].dataIndex;
+                    const day = days[idx];
+                    const sr = day.stops ? Math.round(day.delivered/day.stops*100) : 0;
+                    return ['Success rate: '+sr+'%', 'Total boxes: '+day.boxes];
+                  }
+                }
+              }
+            },
+            scales: {
+              x: {grid:{display:false}, ticks:{font:{size:11}}},
+              y: {beginAtZero:true, ticks:{stepSize:5,font:{size:11}}, grid:{color:'#f3f4f6'}}
+            }
+          }
+        });
+      }
+
+    } catch(e) {
+      document.getElementById('rep-body').innerHTML =
+        '<div style="padding:40px;text-align:center;color:#dc2626">Error loading data: '+e.message+'</div>';
+    }
+  };
+
+  // ── CSV Export ────────────────────────────────────────────────────────────
+  window._exportReportsCsv = function() {
+    const data = window._repData;
+    if(!data){ alert('Load a report first.'); return; }
+    const rows = [
+      ['Driver','Days Active','Total Stops','Total Boxes','Delivered','Failed','Pending','Success %','Proof %','Boxes per Stop'],
+      ...data.drivers.map(d=>{
+        const sr = d.stops?Math.round(d.delivered/d.stops*100):0;
+        const pr = d.delivered?Math.round(d.withProof/d.delivered*100):0;
+        return [d.name, d.dates.size, d.stops, d.boxes, d.delivered, d.failed, d.stops-d.delivered-d.failed, sr+'%', pr+'%', d.stops?(d.boxes/d.stops).toFixed(1):0];
+      })
+    ];
+    const csv = rows.map(r=>r.join(',')).join('\n');
+    const a = document.createElement('a');
+    a.href = 'data:text/csv;charset=utf-8,'+encodeURIComponent(csv);
+    a.download = 'delivery_report_'+document.getElementById('rep-from').value+'_to_'+document.getElementById('rep-to').value+'.csv';
+    a.click();
+  };
+
+  // Auto-load today's data
+  _runReports();
 }
 
 async function renderAnalytics() {
