@@ -568,7 +568,10 @@ async function renderDashboard() {
   const { onSnapshot, collection: fbColl, query: fbQ, where: fbW } = window._firestoreModules||{};
   if(!onSnapshot) return;
 
-  // Real-time listener on today's deliveries
+  // Also compute today in dd.MM.yyyy for Android-generated tasks
+  const todayDot = today.split('-').reverse().join('.');
+
+  // Real-time listener on today's deliveries — query by yyyy-mm-dd format
   const unsub = onSnapshot(
     fbQ(fbColl(window._fbDb,'deliveries'), fbW('date','==',today)),
     (snap) => {
@@ -1886,9 +1889,28 @@ async function renderDispatch(selectedDate) {
 
     function _renderRouteCard(route, deliveries) {
       const driverId = route.driver;
+      const driverPrefix = driverId.split('@')[0].toLowerCase();
+
+      // Flexible driver match: case-insensitive, email prefix, or driverName field
+      function driverMatches(d) {
+        const a = (d.driverId||'').toLowerCase();
+        const b = (d.driverName||'').toLowerCase();
+        const dLow = driverId.toLowerCase();
+        return a === dLow || b === dLow ||
+               a.split('@')[0] === driverPrefix ||
+               b.split('@')[0] === driverPrefix;
+      }
+
       // Merge live delivery status from Firestore into route stops
       const stops = (route.stops||[]).map(s => {
-        const match = deliveries.find(d => d.driverId===driverId && (d.companyName===s.company||d.orderId===s.orderId));
+        const compLow = (s.company||'').toLowerCase().trim();
+        const match = deliveries.find(d =>
+          driverMatches(d) && (
+            (d.companyName||'').toLowerCase().trim() === compLow ||
+            (d.id||'') === (s.orderId||'') ||
+            (d.qrCode||'') === (s.branchId||'')
+          )
+        );
         const liveStatus = match ? (match.status||'PENDING').toUpperCase() : (s.status||'pending').toUpperCase();
         return {...s, liveStatus, match};
       });
@@ -1945,11 +1967,17 @@ async function renderDispatch(selectedDate) {
     routeSnap.forEach(d => { const r=d.data(); if(r.date===selected.date&&r.kitchen===selected.kitchen) routes.push({id:d.id,...r}); });
 
     // ── Real-time listener on deliveries for selected date ──
+    // NOTE: no kitchen filter here — filter client-side so we never miss
+    // deliveries that are missing the kitchen field (e.g. Berlin Kitchen task)
     if(onSnapshot && fbQ && fbW) {
       _dispatchUnsubDeliveries = onSnapshot(
-        fbQ(fbColl(window._fbDb,'deliveries'), fbW('date','==',selected.date), fbW('kitchen','==',selected.kitchen)),
+        fbQ(fbColl(window._fbDb,'deliveries'), fbW('date','==',selected.date)),
         (snap) => {
-          const deliveries = snap.docs.map(d=>({id:d.id,...d.data()}));
+          // Client-side kitchen filter: include docs with matching kitchen OR no kitchen field
+          const kitchenLow = (selected.kitchen||'').toLowerCase();
+          const deliveries = snap.docs.map(d=>({id:d.id,...d.data()})).filter(d =>
+            !d.kitchen || d.kitchen.toLowerCase() === kitchenLow
+          );
 
           // Update live dot
           const dot = document.getElementById('dispatch-live-dot');
@@ -1957,8 +1985,12 @@ async function renderDispatch(selectedDate) {
           if(dot) dot.style.background='#10b981';
           if(lbl) {
             const totalDel = deliveries.filter(d=>d.status==='DELIVERED').length;
-            lbl.textContent = 'Live · '+totalDel+' / '+deliveries.length+' delivered · Last update '+new Date().toLocaleTimeString('de-DE',{hour:'2-digit',minute:'2-digit',second:'2-digit'});
+            const rawTotal = snap.docs.length; // includes all dates fetched before client filter
+            lbl.textContent = 'Live · '+totalDel+' / '+deliveries.length+' delivered · Last update '+new Date().toLocaleTimeString('de-DE',{hour:'2-digit',minute:'2-digit',second:'2-digit'})
+              +(rawTotal !== deliveries.length ? ' · ('+rawTotal+' raw docs)' : '');
           }
+          console.log('[Dispatch] Firestore snapshot: '+snap.docs.length+' raw docs, '+deliveries.length+' after kitchen filter, date='+selected.date);
+          deliveries.forEach(d => console.log('  doc:', d.id, '| driver:', d.driverId, '| company:', d.companyName, '| status:', d.status));
 
           // Update summary bar
           const sumBar = document.getElementById('dispatch-summary-bar');
