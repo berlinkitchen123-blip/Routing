@@ -366,6 +366,7 @@ const NAV_ITEMS = [
   {hash:'#route-plans',label:'Route Plans',icon:'🗺️'},
   {hash:'#planning',label:'Daily Planning',icon:'📋'},
   {hash:'#dispatch',label:'Dispatch',icon:'🚚'},
+  {hash:'#tracking',label:'Live Tracking',icon:'📡'},
   {hash:'#orders',label:'Orders',icon:'📦'},
   {hash:'#couriers',label:'Couriers',icon:'🚗'},
   {hash:'#shifts',label:'Shifts',icon:'🔄'},
@@ -448,6 +449,7 @@ function route() {
     case '#route-plans': renderRoutePlans(); break;
     case '#planning': renderPlanning(); break;
     case '#dispatch': renderDispatch(); break;
+    case '#tracking': renderTracking(); break;
     case '#driver': renderDriverApp(); break;
     case '#orders': renderOrders(); break;
     case '#couriers': renderCouriers(); break;
@@ -3091,6 +3093,105 @@ function togglePC(i) {
 }
 
 // ============================================================
+// LIVE TRACKING PAGE
+// ============================================================
+function renderTracking() {
+  const c = document.getElementById('content');
+  c.innerHTML =
+  '<div style="display:flex;flex-direction:column;height:calc(100vh - 56px)">' +
+    '<div style="padding:12px 20px;background:#fff;border-bottom:1px solid #e5e7eb;display:flex;align-items:center;justify-content:space-between">' +
+      '<div><h2 style="margin:0;font-size:18px">📡 Live Driver Tracking</h2><p style="margin:0;font-size:12px;color:#6b7280" id="tracking-status">Connecting to Firebase…</p></div>' +
+      '<button class="btn btn-sm" onclick="if(window._trackingMap)window._trackingMap.fitBounds(window._trackingMap.getBounds().pad(0.2))">Fit All</button>' +
+    '</div>' +
+    '<div id="tracking-map" style="flex:1;min-height:400px"></div>' +
+    '<div id="tracking-driver-list" style="height:180px;overflow-y:auto;padding:10px 16px;background:#f9fafb;border-top:1px solid #e5e7eb;display:flex;flex-wrap:wrap;gap:10px;align-content:flex-start"></div>' +
+  '</div>';
+
+  // Load Leaflet if not yet loaded
+  const initMap = () => {
+    if(window._trackingMap) { window._trackingMap.remove(); window._trackingMap = null; }
+    const m = L.map('tracking-map').setView([52.52, 13.40], 12);
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      attribution: '© OpenStreetMap', maxZoom: 19
+    }).addTo(m);
+    window._trackingMap = m;
+    window._trackingDriverMarkers = {};
+    _startTrackingListener();
+  };
+
+  if(window.L) {
+    initMap();
+  } else {
+    const css = document.createElement('link');
+    css.rel = 'stylesheet';
+    css.href = 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.css';
+    document.head.appendChild(css);
+    const s = document.createElement('script');
+    s.src = 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.js';
+    s.onload = initMap;
+    document.head.appendChild(s);
+  }
+}
+
+function _startTrackingListener() {
+  if(!window._fbDb) { document.getElementById('tracking-status') && (document.getElementById('tracking-status').textContent = '⚠ Firebase not connected'); return; }
+  const { collection, onSnapshot } = window._firestoreModules || {};
+  if(!onSnapshot) return;
+
+  if(window._trackingUnsubscribe) window._trackingUnsubscribe();
+
+  window._trackingUnsubscribe = onSnapshot(collection(window._fbDb, 'driver_locations'), (snap) => {
+    const statusEl = document.getElementById('tracking-status');
+    const listEl = document.getElementById('tracking-driver-list');
+    const map = window._trackingMap;
+    if(!map || !statusEl) { window._trackingUnsubscribe && window._trackingUnsubscribe(); return; }
+
+    let onlineCount = 0;
+    const driverCards = [];
+
+    snap.forEach((docSnap) => {
+      const d = docSnap.data();
+      const driverId = docSnap.id;
+      const lat = d.lat, lng = d.lng;
+      if(!lat || !lng) return;
+      const online = d.online === true;
+      const speed = d.speed || 0;
+      const speedKmh = speed > 0.5 ? (speed * 3.6).toFixed(1) + ' km/h' : 'Stopped';
+      const accuracy = d.accuracy || 0;
+      const ts = d.timestamp ? new Date(d.timestamp).toLocaleTimeString('de-DE', {hour:'2-digit',minute:'2-digit',second:'2-digit'}) : '—';
+      const delay = d.estimatedDelayMins;
+      const shortName = driverId.includes('@') ? driverId.split('@')[0] : driverId;
+      if(online) onlineCount++;
+
+      const color = online ? '#1A73E8' : '#9E9E9E';
+      const markerHtml = `<div style="background:${color};color:#fff;padding:3px 8px;border-radius:12px;font-size:11px;font-weight:bold;white-space:nowrap;box-shadow:0 2px 6px rgba(0,0,0,0.3)">${shortName}${delay?'<span style="background:#dc2626;border-radius:8px;padding:1px 4px;margin-left:3px;font-size:9px">+${delay}m</span>':''}</div>`;
+
+      if(!window._trackingDriverMarkers[driverId]) {
+        window._trackingDriverMarkers[driverId] = L.marker([lat, lng], {
+          icon: L.divIcon({ className:'', html: markerHtml, iconAnchor:[0,12] })
+        }).addTo(map).bindPopup(`<b>${driverId}</b><br>Speed: ${speedKmh}<br>Accuracy: ±${accuracy.toFixed(0)}m<br>Updated: ${ts}${delay?'<br><span style="color:#dc2626">⚠ Delay: +'+delay+'min</span>':''}`);
+      } else {
+        const mk = window._trackingDriverMarkers[driverId];
+        mk.setLatLng([lat, lng]);
+        mk.setIcon(L.divIcon({ className:'', html: markerHtml, iconAnchor:[0,12] }));
+        mk.getPopup()?.setContent(`<b>${driverId}</b><br>Speed: ${speedKmh}<br>Accuracy: ±${accuracy.toFixed(0)}m<br>Updated: ${ts}${delay?'<br><span style="color:#dc2626">⚠ Delay: +'+delay+'min</span>':''}`);
+        mk.setOpacity(online ? 1 : 0.45);
+      }
+
+      driverCards.push(`<div style="background:#fff;border:1px solid ${online?'#bfdbfe':'#e5e7eb'};border-radius:8px;padding:8px 12px;min-width:160px;font-size:12px">
+        <div style="font-weight:600;color:${color}">${shortName} <span style="font-size:10px;background:${online?'#d1fae5':'#f3f4f6'};color:${online?'#065f46':'#6b7280'};border-radius:8px;padding:1px 6px">${online?'ONLINE':'OFFLINE'}</span></div>
+        <div style="color:#374151;margin-top:2px">🚗 ${speedKmh}</div>
+        <div style="color:#6b7280">🕐 ${ts}</div>
+        ${delay?`<div style="color:#dc2626;font-weight:500">⚠ +${delay} min delay</div>`:''}
+      </div>`);
+    });
+
+    statusEl.textContent = `${onlineCount} driver${onlineCount!==1?'s':''} online · Live updates active`;
+    if(listEl) listEl.innerHTML = driverCards.length ? driverCards.join('') : '<div style="color:#9ca3af;padding:20px">No driver location data yet. Drivers appear here once they start the app.</div>';
+  });
+}
+
+// ============================================================
 // ORDERS
 // ============================================================
 async function renderOrders() {
@@ -3099,14 +3200,53 @@ async function renderOrders() {
   c.innerHTML = '<div class="page"><div style="padding:60px;text-align:center;color:#9ca3af">Loading orders…</div></div>';
   ordersLoading = true;
   try {
-    const qs = new URLSearchParams({date:ordersFilter.date});
-    if(ordersFilter.kitchen!=='all') qs.set('kitchen',ordersFilter.kitchen);
-    if(ordersFilter.courier!=='all') qs.set('courier',ordersFilter.courier);
-    if(ordersFilter.search) qs.set('search',ordersFilter.search);
-    if(ordersFilter.status!=='all') qs.set('status',ordersFilter.status);
-    const r = await fetch(`${API_BASE}/api/orders/flat?${qs}`);
-    const d = await r.json();
-    ordersData = d.orders || [];
+    if(!API_BASE && window._fbDb) {
+      // ── Firestore mode (GitHub Pages) ──────────────────────
+      const { collection, query, where, getDocs } = window._firestoreModules || {};
+      if(getDocs) {
+        const snap = await getDocs(collection(window._fbDb, 'deliveries'));
+        const filterDate = ordersFilter.date; // yyyy-mm-dd or dd.mm.yyyy
+        ordersData = snap.docs.map(d => {
+          const t = d.data();
+          return {
+            orderId: d.id, tiramizooId: t.qrCode || d.id,
+            companyName: t.companyName || '', address: t.address || '',
+            postCode: t.postalCode || '', city: '', source: 'app',
+            windowStart: '', windowEnd: '', eta: '',
+            status: (t.status||'pending').toLowerCase(),
+            courierName: t.driverId || '', boxCount: t.numberOfBoxes || 1,
+            isLate: false, date: t.date || '', notes: t.deliveryInstructions || '',
+            time: t.time || '', routeOrder: t.routeOrder || 0
+          };
+        }).filter(o => {
+          if(filterDate && o.date) {
+            // accept both dd.MM.yyyy and yyyy-MM-dd formats
+            const fd = filterDate.split('-').reverse().join('.'); // yyyy-mm-dd → dd.mm.yyyy
+            if(o.date !== filterDate && o.date !== fd) return false;
+          }
+          if(ordersFilter.status !== 'all' && o.status !== ordersFilter.status) return false;
+          if(ordersFilter.courier !== 'all' && o.courierName !== ordersFilter.courier) return false;
+          if(ordersFilter.search) {
+            const q = ordersFilter.search.toLowerCase();
+            if(!o.companyName.toLowerCase().includes(q) && !o.address.toLowerCase().includes(q) && !o.orderId.toLowerCase().includes(q)) return false;
+          }
+          return true;
+        }).sort((a,b) => (a.routeOrder||0) - (b.routeOrder||0));
+      } else {
+        ordersData = [];
+      }
+    } else if(API_BASE) {
+      const qs = new URLSearchParams({date:ordersFilter.date});
+      if(ordersFilter.kitchen!=='all') qs.set('kitchen',ordersFilter.kitchen);
+      if(ordersFilter.courier!=='all') qs.set('courier',ordersFilter.courier);
+      if(ordersFilter.search) qs.set('search',ordersFilter.search);
+      if(ordersFilter.status!=='all') qs.set('status',ordersFilter.status);
+      const r = await fetch(`${API_BASE}/api/orders/flat?${qs}`);
+      const d = await r.json();
+      ordersData = d.orders || [];
+    } else {
+      ordersData = [];
+    }
   } catch(e) {
     ordersData = [];
   }
@@ -3179,50 +3319,140 @@ function _paintOrders() {
 async function openOD(orderId, source) {
   openPanel('Loading…','<div style="padding:40px;text-align:center;color:#9ca3af">Loading order detail…</div>');
   try {
-    const r = await fetch(`${API_BASE}/api/orders/`+encodeURIComponent(orderId));
-    if(!r.ok) throw new Error('Not found');
-    const o = await r.json();
-    const tl = o.timeline || [];
-    const statusColor = {delivered:'#16a34a',failed:'#dc2626',arrived:'#3b82f6',pending:'#f59e0b',ordered:'#6b7280',picked_up:'#8b5cf6'};
-    const statusLabel = {delivered:'Delivered',failed:'Failed',arrived:'Arrived at stop',pending:'Pending',ordered:'Order created',picked_up:'Picked up from kitchen'};
+    let o = null;
+    let boxes = [];
+    let events = [];
+
+    if(!API_BASE && window._fbDb) {
+      // ── Firestore mode ──────────────────────────────────────
+      const { doc, getDoc, collection, getDocs, query, orderBy, where } = window._firestoreModules || {};
+      if(getDoc) {
+        const snap = await getDoc(doc(window._fbDb, 'deliveries', orderId));
+        if(snap.exists()) {
+          const t = snap.data();
+          o = {
+            orderId, tiramizooId: t.qrCode || orderId,
+            companyName: t.companyName || '',
+            address: t.address || '', postCode: t.postalCode || '', city: '',
+            source: 'app', windowStart: '', windowEnd: '',
+            status: (t.status || 'pending').toLowerCase(),
+            courierName: t.driverId || '', boxCount: t.numberOfBoxes || 1,
+            weightKg: '', notes: t.deliveryInstructions || '',
+            time: t.time || '', date: t.date || '',
+            proofType: t.proofType || '', proofImageUrl: t.proofImageUrl || '',
+            signatureImageUrl: t.signatureImageUrl || '',
+            proofTimestamp: t.proofTimestamp || null,
+            hasProof: t.hasProof || false
+          };
+
+          // Load boxes subcollection
+          try {
+            const boxSnap = await getDocs(collection(window._fbDb, 'deliveries', orderId, 'boxes'));
+            boxes = boxSnap.docs.map(b => ({ id: b.id, ...b.data() })).sort((a,b)=>(a.boxIndex||0)-(b.boxIndex||0));
+          } catch(e2) {}
+
+          // Load driver events for timeline (from driver_events/{today}/{driverId})
+          try {
+            const today = new Date().toISOString().slice(0,10);
+            const evSnap = await getDocs(
+              query(collection(window._fbDb, 'driver_events', today, t.driverId || ''),
+                where('taskId','==', orderId))
+            );
+            events = evSnap.docs.map(e=>e.data()).sort((a,b)=>(a.timestamp||0)-(b.timestamp||0));
+          } catch(e3) {}
+        }
+      }
+    } else if(API_BASE) {
+      const r = await fetch(`${API_BASE}/api/orders/`+encodeURIComponent(orderId));
+      if(!r.ok) throw new Error('Not found');
+      o = await r.json();
+    }
+
+    if(!o) throw new Error('Order not found');
+
+    const statusColor = {delivered:'#16a34a',failed:'#dc2626',arrived:'#3b82f6',pending:'#f59e0b',ordered:'#6b7280',picked_up:'#8b5cf6',pending:'#f59e0b'};
+    const statusLabel = {delivered:'Delivered ✅',failed:'Failed ❌',arrived:'Arrived at stop',pending:'Pending ⏳',ordered:'Order created',picked_up:'Picked up from kitchen',
+      DELIVERED:'Delivered ✅',PENDING:'Pending ⏳',ARRIVED:'Arrived at stop',PICKED_UP:'Picked up ✅'};
+
+    // Build timeline from driver events + status
+    const actionLabel = {
+      STOP_OPENED:'📍 Stop opened by driver', NAVIGATE_STARTED:'🧭 Navigation started',
+      QR_SCANNED:'📷 QR code scanned', QR_MATCHED:'✅ QR code matched',
+      BOX_CHECKED:'📦 Box checked', DELIVERED:'✅ Delivered', DELAY_REPORTED:'⚠ Delay reported'
+    };
+    const tlItems = events.map(ev => ({
+      label: actionLabel[ev.action] || ev.action,
+      time: ev.timestamp ? new Date(ev.timestamp).toLocaleTimeString('de-DE',{hour:'2-digit',minute:'2-digit',second:'2-digit'}) : '',
+      done: true, details: ev.details ? JSON.stringify(ev.details).replace(/[{}"]/g,'') : ''
+    }));
+    // Always add created + current status as first/last items
+    tlItems.unshift({ label: '📋 Order created', time: o.time || o.date || '', done: true });
+    if(['delivered','DELIVERED'].includes(o.status)) {
+      const proofTs = o.proofTimestamp ? new Date(o.proofTimestamp).toLocaleTimeString('de-DE',{hour:'2-digit',minute:'2-digit'}) : '';
+      tlItems.push({ label: '🎉 Delivered', time: proofTs, done: true });
+    }
+
     const body =
     '<div style="display:flex;flex-direction:column;gap:14px">' +
+
+    // ── Order info card ──
     '<div class="card-sm">' +
-      '<div class="section-title">Order Details</div>' +
+      '<div class="section-title">📦 Order Details</div>' +
       '<table style="width:100%;font-size:13px">' +
-        (o.tiramizooId?'<tr><td style="color:#6b7280;padding:4px 0;width:120px">Tiramizoo ID</td><td><code style="background:#f3f4f6;padding:1px 5px;border-radius:3px">'+o.tiramizooId+'</code></td></tr>':'')+
-        '<tr><td style="color:#6b7280;padding:4px 0">Source</td><td><span class="badge '+(o.source==='imported'?'badge-blue':'badge-gray')+'">'+o.source+'</span></td></tr>'+
+        (o.tiramizooId && o.tiramizooId!==orderId ? '<tr><td style="color:#6b7280;padding:4px 0;width:130px">QR / Order ID</td><td><code style="background:#f3f4f6;padding:1px 5px;border-radius:3px">'+o.tiramizooId+'</code></td></tr>' : '') +
         '<tr><td style="color:#6b7280;padding:4px 0">Company</td><td><b>'+o.companyName+'</b></td></tr>'+
-        (o.pickupAddress?'<tr><td style="color:#6b7280;padding:4px 0">Pickup</td><td>'+o.pickupAddress+'</td></tr>':'')+
-        '<tr><td style="color:#6b7280;padding:4px 0">Delivery</td><td>'+o.address+', '+o.postCode+' '+o.city+'</td></tr>'+
-        (o.contactInfo?'<tr><td style="color:#6b7280;padding:4px 0">Contact</td><td>'+o.contactInfo+'</td></tr>':'')+
-        '<tr><td style="color:#6b7280;padding:4px 0">Time Window</td><td>'+(o.windowStart&&o.windowEnd?new Date(o.windowStart).toLocaleTimeString('de-DE',{hour:'2-digit',minute:'2-digit'})+' – '+new Date(o.windowEnd).toLocaleTimeString('de-DE',{hour:'2-digit',minute:'2-digit'}):'—')+'</td></tr>'+
-        (o.eta?'<tr><td style="color:#6b7280;padding:4px 0">ETA</td><td>'+new Date(o.eta).toLocaleTimeString('de-DE',{hour:'2-digit',minute:'2-digit'})+'</td></tr>':'')+
-        '<tr><td style="color:#6b7280;padding:4px 0">Packages</td><td>'+o.boxCount+' boxes · '+o.weightKg+'kg</td></tr>'+
-        '<tr><td style="color:#6b7280;padding:4px 0">Status</td><td>'+badge(o.status)+'</td></tr>'+
-        '<tr><td style="color:#6b7280;padding:4px 0">Courier</td><td>'+o.courierName+'</td></tr>'+
-        (o.localNotes?'<tr><td style="color:#6b7280;padding:4px 0">Notes</td><td>'+o.localNotes+'</td></tr>':'')+
+        '<tr><td style="color:#6b7280;padding:4px 0">Address</td><td>'+o.address+(o.postCode?' · '+o.postCode:'')+'</td></tr>'+
+        (o.notes ? '<tr><td style="color:#6b7280;padding:4px 0">Instructions</td><td style="color:#374151">'+o.notes+'</td></tr>' : '') +
+        '<tr><td style="color:#6b7280;padding:4px 0">Date</td><td>'+o.date+(o.time?' · '+o.time:'')+'</td></tr>'+
+        '<tr><td style="color:#6b7280;padding:4px 0">Packages</td><td>'+o.boxCount+' box'+(o.boxCount!==1?'es':'')+'</td></tr>'+
+        '<tr><td style="color:#6b7280;padding:4px 0">Status</td><td>'+badge(o.status.toLowerCase())+'</td></tr>'+
+        '<tr><td style="color:#6b7280;padding:4px 0">Courier</td><td>🚗 <b>'+o.courierName+'</b></td></tr>'+
       '</table>' +
     '</div>' +
-    (tl.length>0?
-    '<div class="card-sm"><div class="section-title">Status Timeline</div>' +
-    tl.map((t,idx)=>{
-      const isDone = idx<tl.length-1 || ['delivered','failed'].includes(o.status);
-      const color = statusColor[t.status]||'#6b7280';
-      const lbl = statusLabel[t.status]||t.status;
-      const atStr = t.at ? new Date(t.at).toLocaleString('de-DE',{day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'}) : '';
-      return '<div class="timeline-item">' +
-        '<div class="timeline-dot" style="background:'+(isDone?color:'#d1d5db')+'"></div>' +
-        '<div><div class="timeline-title" style="color:'+(isDone?'#111827':'#9ca3af')+'">'+lbl+'</div>' +
-        '<div class="timeline-time">'+(atStr||(t.changedBy||''))+'</div></div></div>';
-    }).join('')+
-    '</div>':'') +
-    (o.packageDetails&&o.packageDetails.length>0?
-    '<div class="card-sm"><div class="section-title">Package Details</div>' +
-    o.packageDetails.map((p,i)=>'<div style="font-size:13px;padding:4px 0;border-bottom:1px solid #f3f4f6">'+
-      'Box '+(i+1)+': '+(p.width||'?')+'×'+(p.height||'?')+'×'+(p.length||'?')+'cm · '+(p.weight||14)+'kg</div>').join('')+
-    '</div>':'') +
+
+    // ── Per-box scan status ──
+    (boxes.length > 0 ?
+    '<div class="card-sm">' +
+      '<div class="section-title">📦 Package Scan Status</div>' +
+      boxes.map((b,i) => {
+        const scanned = b.status === 'SCANNED';
+        return '<div style="display:flex;align-items:center;gap:10px;padding:6px 0;border-bottom:1px solid #f3f4f6;font-size:13px">'+
+          '<span style="font-size:16px">'+(scanned?'✅':'⬜')+'</span>'+
+          '<span style="flex:1">Box '+(b.boxIndex!==undefined?b.boxIndex+1:i+1)+(b.scannedQr?' · <code style="font-size:11px;background:#f3f4f6;padding:1px 4px;border-radius:3px">'+b.scannedQr+'</code>':'')+'</span>'+
+          '<span style="color:'+(scanned?'#16a34a':'#9ca3af')+';font-size:12px">'+(scanned?'Scanned · '+(b.scannedAt?new Date(b.scannedAt).toLocaleTimeString('de-DE',{hour:'2-digit',minute:'2-digit'}):''):'Not scanned')+'</span>'+
+          '</div>';
+      }).join('') +
+    '</div>' :
+    (o.boxCount > 0 ?
+    '<div class="card-sm">' +
+      '<div class="section-title">📦 Packages ('+o.boxCount+')</div>' +
+      Array.from({length:o.boxCount},(_,i)=>'<div style="display:flex;align-items:center;gap:8px;padding:5px 0;font-size:13px;border-bottom:1px solid #f3f4f6"><span>⬜</span><span>Box '+(i+1)+'</span><span style="margin-left:auto;color:#9ca3af;font-size:12px">No scan data</span></div>').join('') +
+    '</div>' : '')) +
+
+    // ── Proof photo / signature ──
+    (o.proofImageUrl || o.signatureImageUrl || o.hasProof ?
+    '<div class="card-sm">' +
+      '<div class="section-title">📸 Delivery Proof</div>' +
+      (o.proofImageUrl ? '<div style="margin-bottom:10px"><img src="'+o.proofImageUrl+'" style="max-width:100%;border-radius:8px;border:1px solid #e5e7eb" onerror="this.style.display=\'none\'"/></div>' : '') +
+      (o.signatureImageUrl ? '<div><div style="font-size:12px;color:#6b7280;margin-bottom:4px">Signature:</div><img src="'+o.signatureImageUrl+'" style="max-width:100%;max-height:120px;border-radius:8px;border:1px solid #e5e7eb" onerror="this.style.display=\'none\'"/></div>' : '') +
+      (!o.proofImageUrl && !o.signatureImageUrl && o.hasProof ? '<div style="color:#6b7280;font-size:13px">✅ Proof captured · Type: '+(o.proofType||'unknown')+(o.proofTimestamp?'<br>🕐 '+new Date(o.proofTimestamp).toLocaleString('de-DE',{day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'}):'')+'</div>' : '') +
+    '</div>' : '') +
+
+    // ── Status Timeline ──
+    (tlItems.length > 0 ?
+    '<div class="card-sm"><div class="section-title">🕐 Status Timeline</div>' +
+    tlItems.map((t,idx) =>
+      '<div class="timeline-item">' +
+        '<div class="timeline-dot" style="background:'+(t.done?'#1A73E8':'#d1d5db')+'"></div>' +
+        '<div><div class="timeline-title" style="color:'+(t.done?'#111827':'#9ca3af')+'">'+t.label+'</div>' +
+        (t.time?'<div class="timeline-time">'+t.time+'</div>':'') +
+        (t.details?'<div style="font-size:11px;color:#9ca3af;margin-top:2px">'+t.details+'</div>':'')+
+        '</div></div>'
+    ).join('') +
+    '</div>' : '') +
+
     '</div>';
+
     openPanel((o.tiramizooId||o.orderId)+' – '+o.companyName, body);
   } catch(e) {
     openPanel('Error','<div style="padding:20px;color:#dc2626">'+e.message+'</div>');
