@@ -156,6 +156,16 @@ class DeliveryRepository {
         awaitClose { subscription?.remove() }
     }
 
+    suspend fun getDeliveryById(taskId: String): DeliveryTask? {
+        return try {
+            val snap = db?.collection("deliveries")?.document(taskId)?.get()?.await()
+            snap?.let { parseDeliveryTask(it) }
+        } catch (e: Exception) {
+            Log.e("DeliveryRepository", "Error fetching delivery by ID", e)
+            null
+        }
+    }
+
     suspend fun getDeliveryByQrCode(qrCode: String): DeliveryTask? {
         return try {
             val snapshot = db?.collection("deliveries")

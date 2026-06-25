@@ -117,29 +117,20 @@ fun RoutingNavigation() {
         composable(Screen.Scanner.route) {
             ScannerScreen(
                 navController = navController,
+                deliveryRepo = deliveryRepo,
+                driverId = currentDriverId,
+                routeDeliveries = routeDeliveries,
                 onBarcodeScanned = { qr ->
+                    // Verification + logging is now done inside ScannerScreen/verifyQrCode.
+                    // Here we just navigate to the matched delivery detail.
                     coroutineScope.launch {
-                        deliveryRepo.logDriverAction(
-                            driverId = currentDriverId,
-                            action = "QR_SCANNED",
-                            details = mapOf("qrCode" to qr)
-                        )
-                        val task = deliveryRepo.getDeliveryByQrCode(qr)
+                        val (taskId, _) = com.example.ui.screens.scanner.parseBoxQr(qr)
+                        val task = routeDeliveries.find { it.id == taskId || it.qrCode == qr || it.qrCode == taskId }
+                            ?: deliveryRepo.getDeliveryByQrCode(qr)
+                            ?: deliveryRepo.getDeliveryByQrCode(taskId)
                         if (task != null) {
                             currentDelivery = task
-                            deliveryRepo.logDriverAction(
-                                driverId = currentDriverId,
-                                action = "QR_MATCHED",
-                                taskId = task.id,
-                                details = mapOf("qrCode" to qr, "companyName" to task.companyName)
-                            )
                             navController.navigate(Screen.DeliveryDetail.route)
-                        } else {
-                            deliveryRepo.logDriverAction(
-                                driverId = currentDriverId,
-                                action = "QR_NOT_FOUND",
-                                details = mapOf("qrCode" to qr)
-                            )
                         }
                     }
                 }

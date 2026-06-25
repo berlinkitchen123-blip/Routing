@@ -10,6 +10,7 @@
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.2/dist/chart.umd.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <script src="https://cdn.socket.io/4.7.4/socket.io.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/qrcode@1.5.3/build/qrcode.min.js"></script>
 <script type="module">
 // Firebase for weekly templates & GPS
 import { initializeApp, getApps } from 'https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js';
@@ -368,6 +369,7 @@ const NAV_ITEMS = [
   {hash:'#route-plans',label:'Route Plans',icon:'🗺️'},
   {hash:'#planning',label:'Daily Planning',icon:'📋'},
   {hash:'#dispatch',label:'Dispatch',icon:'🚚'},
+  {hash:'#labels',label:'Labels & QR',icon:'🏷️'},
   {hash:'#tracking',label:'Live Tracking',icon:'📡'},
   {hash:'#orders',label:'Orders',icon:'📦'},
   {hash:'#couriers',label:'Couriers',icon:'🚗'},
@@ -456,6 +458,7 @@ function route() {
     case '#route-plans': renderRoutePlans(); break;
     case '#planning': renderPlanning(); break;
     case '#dispatch': renderDispatch(); break;
+    case '#labels':   renderLabels(); break;
     case '#tracking': renderTracking(); break;
     case '#driver': renderDriverApp(); break;
     case '#orders': renderOrders(); break;
@@ -1752,8 +1755,13 @@ async function lockAndDispatch() {
         const orderId = 'ORD-' + datePart + '-' + String(orderSeq).padStart(3,'0');
         orderSeq++;
 
-        // Primary QR code = first box ID or branchId
-        const primaryQr = (stop.boxIds && stop.boxIds[0]) || stop.branchId || orderId;
+        // Per-box QR codes: {orderId}#{boxNumber} — parseable by Android scanner
+        const numBoxes = stop.orderCount || (stop.boxIds && stop.boxIds.length) || 1;
+        const boxQrCodes = [];
+        for (let b = 1; b <= numBoxes; b++) {
+          boxQrCodes.push(orderId + '#' + b);
+        }
+        const primaryQr = boxQrCodes[0]; // first box QR = primary
 
         const docData = {
           id: orderId,
@@ -1761,13 +1769,14 @@ async function lockAndDispatch() {
           driverId,
           driverName: driver,
           qrCode: primaryQr,
+          boxQrCodes,                // array: ['ORD-xxx#1','ORD-xxx#2',...]
           boxIds: stop.boxIds || [],
           companyName: stop.company,
           address: stop.address || '',
           postalCode: stop.postCode || '',
           city: stop.city || '',
           deliveryInstructions: stop.note || stop.deliveryInfo || '',
-          numberOfBoxes: stop.orderCount || (stop.boxIds ? stop.boxIds.length : 1) || 1,
+          numberOfBoxes: numBoxes,
           routeOrder: stop.sequence || orderSeq,
           sequence: stop.sequence || orderSeq,
           date: dateStr,
@@ -3533,6 +3542,201 @@ function toggleRPStop(key) {
 // ============================================================
 // LIVE TRACKING PAGE
 // ============================================================
+// ── Labels & QR Code Generator ────────────────────────────────────────────────
+async function renderLabels() {
+  const c = document.getElementById('content');
+  c.innerHTML = '<div style="padding:24px"><h2 style="margin:0 0 4px;font-size:20px;font-weight:700">🏷️ Labels & QR Codes</h2><p style="color:#6b7280;margin:0 0 20px">Generating…</p></div>';
+
+  // ── Controls ──
+  const today = new Date().toLocaleDateString('de-DE',{timeZone:'Europe/Berlin'}).split('.').reverse().join('-').split('-').map((v,i)=>i===1||i===2?v.padStart(2,'0'):v).join('-');
+  // simpler: use ISO format
+  const todayISO = new Date().toLocaleDateString('sv-SE',{timeZone:'Europe/Berlin'});
+
+  // Load dispatched dates from dispatches collection
+  let dispatchDates = [todayISO];
+  try {
+    const {getDocs,collection,query,orderBy:fbOrder} = _firestoreModules;
+    const dSnap = await getDocs(query(collection(_fbDb,'dispatches'),fbOrder('lockedAt','desc')));
+    const dates = [...new Set(dSnap.docs.map(d=>d.data().date).filter(Boolean))].slice(0,30);
+    if(dates.length) dispatchDates = dates;
+  } catch(e){}
+
+  let _labelsDate = todayISO;
+  let _labelsKitchen = 'berlin';
+  let _labelsUnsubscribe = null;
+
+  function buildPage() {
+    c.innerHTML =
+      '<div style="padding:20px 24px 0">' +
+        '<div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:20px">' +
+          '<h2 style="margin:0;font-size:20px;font-weight:700">🏷️ Labels & QR Codes</h2>' +
+          '<input type="date" id="lbl-date" value="'+_labelsDate+'" style="border:1px solid #d1d5db;border-radius:8px;padding:6px 12px;font-size:14px"/>' +
+          '<div style="display:flex;gap:6px">' +
+            '<button id="lbl-berlin" onclick="_labelsKitchen=\'berlin\';_labelsRender()" style="padding:6px 16px;border-radius:8px;border:1px solid #d1d5db;font-weight:600;cursor:pointer;background:'+ (_labelsKitchen==='berlin'?'#1d4ed8':'#fff') +';color:'+(_labelsKitchen==='berlin'?'#fff':'#374151')+'">Berlin</button>' +
+            '<button id="lbl-munich" onclick="_labelsKitchen=\'munich\';_labelsRender()" style="padding:6px 16px;border-radius:8px;border:1px solid #d1d5db;font-weight:600;cursor:pointer;background:'+ (_labelsKitchen==='munich'?'#1d4ed8':'#fff') +';color:'+(_labelsKitchen==='munich'?'#fff':'#374151')+'">Munich</button>' +
+          '</div>' +
+          '<button onclick="_labelsPrint()" style="padding:6px 16px;border-radius:8px;border:1px solid #1d4ed8;background:#1d4ed8;color:#fff;font-weight:600;cursor:pointer;margin-left:auto">🖨️ Print All Labels</button>' +
+        '</div>' +
+      '</div>' +
+      '<div id="lbl-container" style="padding:0 24px 40px"></div>';
+
+    document.getElementById('lbl-date').addEventListener('change', e => {
+      _labelsDate = e.target.value;
+      _labelsRender();
+    });
+    _labelsRender();
+  }
+
+  window._labelsKitchen = _labelsKitchen;
+  window._labelsDate = todayISO;
+  window._labelsRender = async function() {
+    const date = document.getElementById('lbl-date')?.value || _labelsDate;
+    const kit = window._labelsKitchen || 'berlin';
+    // Update button styles
+    const bb = document.getElementById('lbl-berlin');
+    const bm = document.getElementById('lbl-munich');
+    if(bb) { bb.style.background = kit==='berlin'?'#1d4ed8':'#fff'; bb.style.color = kit==='berlin'?'#fff':'#374151'; }
+    if(bm) { bm.style.background = kit==='munich'?'#1d4ed8':'#fff'; bm.style.color = kit==='munich'?'#fff':'#374151'; }
+
+    const lbl = document.getElementById('lbl-container');
+    if(!lbl) return;
+    lbl.innerHTML = '<div style="padding:40px;text-align:center;color:#9ca3af">Loading deliveries…</div>';
+
+    try {
+      const {getDocs,collection,query,where:fbWhere} = _firestoreModules;
+      const snap = await getDocs(query(collection(_fbDb,'deliveries'), fbWhere('date','==',date)));
+      const all = snap.docs.map(d=>({id:d.id,...d.data()}));
+      const deliveries = all.filter(d=> !d.kitchen || d.kitchen.toLowerCase() === kit.toLowerCase());
+
+      if(!deliveries.length) {
+        lbl.innerHTML = '<div style="padding:60px;text-align:center;color:#6b7280">No deliveries found for '+date+' ('+kit+')<br><small>Make sure routes are dispatched first.</small></div>';
+        return;
+      }
+
+      // Group by driver
+      const byDriver = {};
+      deliveries.forEach(d => {
+        const drv = d.driverId || d.driverName || 'Unassigned';
+        if(!byDriver[drv]) byDriver[drv] = [];
+        byDriver[drv].push(d);
+      });
+      // Sort each driver's stops by sequence/routeOrder
+      Object.values(byDriver).forEach(arr => arr.sort((a,b)=>(a.sequence||a.routeOrder||0)-(b.sequence||b.routeOrder||0)));
+
+      // Summary bar
+      const totalStops = deliveries.length;
+      const totalBoxes = deliveries.reduce((s,d)=>s+(d.numberOfBoxes||1),0);
+      lbl.innerHTML =
+        '<div style="background:#f0f9ff;border:1px solid #bae6fd;border-radius:10px;padding:14px 18px;margin-bottom:20px;display:flex;gap:24px;flex-wrap:wrap">' +
+          '<span style="font-size:14px;font-weight:600;color:#0369a1">📦 '+totalStops+' stops · '+totalBoxes+' boxes · '+Object.keys(byDriver).length+' drivers</span>' +
+          '<span style="font-size:13px;color:#6b7280">'+date+' · '+kit.charAt(0).toUpperCase()+kit.slice(1)+' Kitchen</span>' +
+        '</div>' +
+        '<div id="lbl-driver-sections"></div>';
+
+      const sections = document.getElementById('lbl-driver-sections');
+
+      // Build per-driver sections
+      for(const [drv, stops] of Object.entries(byDriver)) {
+        const drvBoxes = stops.reduce((s,d)=>s+(d.numberOfBoxes||1),0);
+        const drvEl = document.createElement('div');
+        drvEl.style.cssText = 'margin-bottom:32px';
+        drvEl.innerHTML =
+          '<div style="display:flex;align-items:center;gap:10px;margin-bottom:12px;padding-bottom:8px;border-bottom:2px solid #e5e7eb">' +
+            '<div style="width:36px;height:36px;border-radius:50%;background:#1d4ed8;color:#fff;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:14px">'+drv.charAt(0).toUpperCase()+'</div>' +
+            '<div>' +
+              '<div style="font-weight:700;font-size:16px">'+drv.split('@')[0]+'</div>' +
+              '<div style="font-size:12px;color:#6b7280">'+stops.length+' stops · '+drvBoxes+' boxes</div>' +
+            '</div>' +
+          '</div>' +
+          '<div class="lbl-grid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:16px" id="lbl-grid-'+_safeId(drv)+'"></div>';
+        sections.appendChild(drvEl);
+
+        const grid = document.getElementById('lbl-grid-'+_safeId(drv));
+
+        // Generate one label card per BOX (not per stop)
+        for(const stop of stops) {
+          const numBoxes = stop.numberOfBoxes || 1;
+          const boxQrCodes = stop.boxQrCodes && stop.boxQrCodes.length === numBoxes
+            ? stop.boxQrCodes
+            : Array.from({length: numBoxes}, (_,i) => stop.id + '#' + (i+1));
+
+          for(let b = 0; b < numBoxes; b++) {
+            const qrVal = boxQrCodes[b];
+            const card = document.createElement('div');
+            card.className = 'lbl-card';
+            card.style.cssText = 'background:#fff;border:1.5px solid #e5e7eb;border-radius:12px;padding:14px;display:flex;flex-direction:column;gap:6px;box-shadow:0 1px 4px rgba(0,0,0,.06);page-break-inside:avoid';
+            card.innerHTML =
+              '<div style="font-weight:700;font-size:14px;line-height:1.3;color:#111">'+_esc(stop.companyName||'Unknown')+'</div>' +
+              '<div style="font-size:11px;color:#6b7280;line-height:1.4">'+_esc(stop.address||'')+(stop.postalCode?' · '+stop.postalCode:'')+'</div>' +
+              '<div style="display:flex;justify-content:space-between;align-items:center;margin:4px 0">' +
+                '<span style="font-size:11px;background:#f0f9ff;color:#0369a1;border-radius:4px;padding:2px 7px;font-weight:600">'+drv.split('@')[0]+'</span>' +
+                '<span style="font-size:12px;font-weight:700;color:#374151">Box '+(b+1)+' / '+numBoxes+'</span>' +
+              '</div>' +
+              '<canvas id="qr-'+_safeId(qrVal)+'" style="width:100%;border-radius:6px;border:1px solid #f3f4f6"></canvas>' +
+              '<div style="font-size:10px;color:#9ca3af;text-align:center;font-family:monospace;margin-top:2px">'+qrVal+'</div>' +
+              '<div style="font-size:10px;color:#9ca3af;text-align:center">'+date+'</div>';
+            grid.appendChild(card);
+
+            // Generate QR into the canvas
+            const canvas = card.querySelector('canvas');
+            if(typeof QRCode !== 'undefined') {
+              QRCode.toCanvas(canvas, qrVal, {
+                width: 200, margin: 2,
+                color: { dark: '#111111', light: '#ffffff' },
+                errorCorrectionLevel: 'H'  // High = survives label damage
+              }, err => { if(err) canvas.parentElement.querySelector('div:last-child').textContent = qrVal; });
+            } else {
+              canvas.style.display='none';
+              card.insertAdjacentHTML('beforeend','<div style="text-align:center;font-size:9px;color:#ef4444">QR lib not loaded</div>');
+            }
+          }
+        }
+      }
+    } catch(e) {
+      lbl.innerHTML = '<div style="padding:40px;text-align:center;color:#ef4444">Error loading deliveries: '+e.message+'</div>';
+    }
+  };
+
+  window._labelsPrint = function() {
+    const date = document.getElementById('lbl-date')?.value || todayISO;
+    const kit = window._labelsKitchen || 'berlin';
+    const cards = document.querySelectorAll('.lbl-card');
+    if(!cards.length) { alert('No labels to print. Load a date first.'); return; }
+
+    const win = window.open('','_blank');
+    win.document.write('<html><head><title>Labels '+date+' · '+kit+'</title><style>');
+    win.document.write('body{font-family:sans-serif;margin:0;padding:8px;background:#fff}');
+    win.document.write('.page{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;padding:8px}');
+    win.document.write('.lbl-card{border:1.5px solid #333;border-radius:8px;padding:12px;page-break-inside:avoid;display:flex;flex-direction:column;gap:4px}');
+    win.document.write('.lbl-card canvas{width:100%!important;height:auto!important}');
+    win.document.write('@media print{@page{size:A4;margin:10mm}.page{page-break-after:always}}');
+    win.document.write('</style></head><body><div class="page">');
+
+    cards.forEach(card => {
+      // Clone the card including canvas (we need to copy canvas pixel data)
+      const clone = card.cloneNode(true);
+      const origCanvas = card.querySelector('canvas');
+      const cloneCanvas = clone.querySelector('canvas');
+      if(origCanvas && cloneCanvas) {
+        cloneCanvas.width = origCanvas.width;
+        cloneCanvas.height = origCanvas.height;
+        cloneCanvas.getContext('2d').drawImage(origCanvas, 0, 0);
+      }
+      win.document.write(clone.outerHTML);
+    });
+
+    win.document.write('</div></body></html>');
+    win.document.close();
+    win.focus();
+    setTimeout(() => win.print(), 600);
+  };
+
+  function _safeId(s) { return (s||'').replace(/[^a-zA-Z0-9]/g,'_'); }
+  function _esc(s) { return (s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+
+  buildPage();
+}
+
 function renderTracking() {
   const c = document.getElementById('content');
   c.innerHTML =
