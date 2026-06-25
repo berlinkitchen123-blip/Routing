@@ -192,7 +192,7 @@ tbody tr{transition:background 0.1s;cursor:pointer}
     <div class="sidebar-subtitle">Logistics Platform</div>
   </div>
   <nav class="sidebar-nav" id="sidebar-nav"></nav>
-  <div class="sidebar-footer">v2.2.0</div>
+  <div class="sidebar-footer">v3.0.0</div>
 </div>
 
 <div id="main">
@@ -632,6 +632,8 @@ async function renderDashboard() {
               '<div style="font-size:11px;color:#6b7280">'+tot+' stops · '+del+' delivered</div>' +
               '<div class="progress-bar" style="margin-top:4px"><div class="progress-fill" style="width:'+dpct+'%;background:'+color+'"></div></div>' +
             '</div>' +
+            '<a href="#dispatch" onclick="event.stopPropagation()" title="View in Dispatch" style="font-size:11px;color:#1d4ed8;text-decoration:none;padding:3px 8px;border:1px solid #1d4ed8;border-radius:5px;margin-right:6px">Dispatch →</a>' +
+            '<a href="#route-plans" onclick="event.stopPropagation()" title="View Route Plan" style="font-size:11px;color:#6b7280;text-decoration:none;padding:3px 8px;border:1px solid #e5e7eb;border-radius:5px;margin-right:6px">Plan →</a>' +
             '<span id="rc-arrow-'+idx+'" style="color:#9ca3af;font-size:11px;transition:transform 0.2s">▼</span>' +
             '</div>' +
             '<div class="route-card-body" id="rc-body-'+idx+'">' +
@@ -657,8 +659,8 @@ async function renderDashboard() {
       if(lbl) lbl.textContent='Live · '+new Date().toLocaleTimeString('de-DE',{hour:'2-digit',minute:'2-digit',second:'2-digit'});
       if(sub) sub.textContent = 'Today · '+pct+'% delivered · '+total+' total orders';
 
-      // Put geocoded stop markers on map
-      _updateDashMapStops(all);
+      // Put geocoded stop markers on map (use deduped deliveries)
+      _updateDashMapStops(Object.values(seen));
     }
   );
   // Store unsub so it can be cleaned up on nav away
@@ -667,26 +669,41 @@ async function renderDashboard() {
 
 // Push geocoded delivery stops onto the dashboard map
 function _updateDashMapStops(deliveries) {
-  if(!window._dashMap) return;
+  const map = window.leafletMap; // use the actual map instance
+  if(!map) return;
   if(window._dashStopMarkers) window._dashStopMarkers.forEach(m=>m.remove());
   window._dashStopMarkers = [];
-  const COLORS = ['#e85d04','#3b82f6','#10b981','#8b5cf6','#f59e0b','#ef4444','#06b6d4','#ec4899'];
+  const COLORS = ['#e85d04','#3b82f6','#8b5cf6','#f59e0b','#ef4444','#06b6d4','#ec4899'];
   const driverColors = {};
   let colorIdx = 0;
+  let pinCount = 0;
   deliveries.forEach(d => {
     if(!d.lat || !d.lng) return;
-    if(!driverColors[d.driverId]) driverColors[d.driverId] = COLORS[colorIdx++%COLORS.length];
-    const color = d.status==='DELIVERED' ? '#10b981' : driverColors[d.driverId];
+    const drv = d.driverId || d.driverName || '';
+    if(!driverColors[drv]) driverColors[drv] = COLORS[colorIdx++%COLORS.length];
+    const isDone = (d.status||'').toUpperCase() === 'DELIVERED';
+    const color = isDone ? '#10b981' : driverColors[drv];
+    const size = isDone ? 8 : 10;
     const icon = L.divIcon({
       className:'',
-      html:'<div style="background:'+color+';width:10px;height:10px;border-radius:50%;border:2px solid #fff;box-shadow:0 1px 4px rgba(0,0,0,0.4)"></div>',
-      iconSize:[10,10],iconAnchor:[5,5]
+      html:'<div style="background:'+color+';width:'+size+'px;height:'+size+'px;border-radius:50%;border:2px solid #fff;box-shadow:0 1px 4px rgba(0,0,0,0.4);opacity:'+(isDone?'0.7':'1')+'"></div>',
+      iconSize:[size,size], iconAnchor:[size/2,size/2]
     });
     const m = L.marker([d.lat,d.lng],{icon})
-      .addTo(window._dashMap)
-      .bindPopup('<b>'+d.companyName+'</b><br>'+d.address+'<br><span style="color:'+(d.status==='DELIVERED'?'#10b981':'#f59e0b')+'">'+d.status+'</span>');
+      .addTo(map)
+      .bindPopup(
+        '<div style="min-width:160px"><b style="font-size:13px">'+d.companyName+'</b><br>' +
+        '<span style="font-size:11px;color:#6b7280">'+d.address+'</span><br>' +
+        '<span style="font-size:11px;color:'+(isDone?'#16a34a':'#d97706')+';font-weight:600">'+d.status+'</span>' +
+        (drv?'<br><span style="font-size:11px;color:#6b7280">Driver: '+drv.split('@')[0]+'</span>':'') +
+        '</div>'
+      );
     window._dashStopMarkers.push(m);
+    pinCount++;
   });
+  // Update badge
+  const badge = document.getElementById('dash-map-badge');
+  if(badge) { badge.textContent = pinCount+' stops'; badge.style.display='inline'; }
 }
 
 function setDashTab(t) { dashboardTab=t; renderDashboard(); }
@@ -2028,9 +2045,7 @@ async function renderDispatch(selectedDate) {
           if(dot) dot.style.background='#10b981';
           if(lbl) {
             const totalDel = deliveries.filter(d=>d.status==='DELIVERED').length;
-            const rawTotal = snap.docs.length; // includes all dates fetched before client filter
-            lbl.textContent = 'Live · '+totalDel+' / '+deliveries.length+' delivered · Last update '+new Date().toLocaleTimeString('de-DE',{hour:'2-digit',minute:'2-digit',second:'2-digit'})
-              +(rawTotal !== deliveries.length ? ' · ('+rawTotal+' raw docs)' : '');
+            lbl.textContent = 'Live · '+totalDel+' / '+deliveries.length+' delivered · Last update '+new Date().toLocaleTimeString('de-DE',{hour:'2-digit',minute:'2-digit',second:'2-digit'});
           }
           console.log('[Dispatch] Firestore snapshot: '+snap.docs.length+' raw docs, '+deliveries.length+' after kitchen filter, date='+selected.date);
           deliveries.forEach(d => console.log('  doc:', d.id, '| driver:', d.driverId, '| company:', d.companyName, '| status:', d.status));
@@ -3410,7 +3425,17 @@ async function renderRoutePlans() {
 
   // Load deliveries for selected date
   const snap = await getDocs(fbQ(fbColl(window._fbDb,'deliveries'), fbW('date','==',_rpDate), fbW('kitchen','==',_rpCity)));
-  const deliveries = snap.docs.map(d=>({id:d.id,...d.data()}));
+  const raw = snap.docs.map(d=>({id:d.id,...d.data()}));
+
+  // Dedup: same driver+company → keep highest-status doc
+  const RP_RANK = {PENDING:0,ARRIVED:1,SCANNED:2,PICKED_UP:3,DELIVERED:4,FAILED:4};
+  const rpSeen = {};
+  raw.forEach(d => {
+    const key = ((d.driverName||d.driverId||'')+'|'+(d.companyName||'')).toLowerCase().trim();
+    if(!rpSeen[key] || (RP_RANK[(d.status||'').toUpperCase()]||0) > (RP_RANK[(rpSeen[key].status||'').toUpperCase()]||0))
+      rpSeen[key] = d;
+  });
+  const deliveries = Object.values(rpSeen);
 
   // Group by driver
   const byDriver = {};
@@ -3803,7 +3828,8 @@ function _startTrackingListener() {
       const driverId = docSnap.id;
       const lat = d.lat, lng = d.lng;
       if(!lat || !lng) return;
-      const online = d.online === true;
+      // Consider driver online if: online flag OR GPS updated within last 2 hours
+      const online = d.online === true || (d.timestamp && (Date.now() - d.timestamp) < 2 * 60 * 60 * 1000);
       const speed = d.speed || 0;
       const speedKmh = speed > 0.5 ? (speed * 3.6).toFixed(1) + ' km/h' : 'Stopped';
       const accuracy = d.accuracy || 0;
@@ -3854,25 +3880,44 @@ async function renderOrders() {
       const { collection, query, where, getDocs } = window._firestoreModules || {};
       if(getDocs) {
         const snap = await getDocs(collection(window._fbDb, 'deliveries'));
-        const filterDate = ordersFilter.date; // yyyy-mm-dd or dd.mm.yyyy
-        ordersData = snap.docs.map(d => {
+        const filterDate = ordersFilter.date;
+        const STATUS_RANK_ORD = {PENDING:0,ARRIVED:1,SCANNED:2,PICKED_UP:3,DELIVERED:4,FAILED:4};
+
+        // Dedup: same driver+company → keep highest-status doc
+        const seenOrd = {};
+        snap.docs.forEach(d => {
           const t = d.data();
+          const key = ((t.driverId||t.driverName||'')+'|'+(t.companyName||'')).toLowerCase().trim();
+          const rank = STATUS_RANK_ORD[(t.status||'').toUpperCase()]||0;
+          if(!seenOrd[key] || rank > (STATUS_RANK_ORD[(seenOrd[key].status||'').toUpperCase()]||0)) {
+            seenOrd[key] = {docId: d.id, ...t};
+          }
+        });
+
+        ordersData = Object.values(seenOrd).map(t => {
+          // Use short orderId if it looks like one (≤10 chars), else use doc ID
+          const shortId = (t.orderId && t.orderId.length <= 10) ? t.orderId : t.docId;
           return {
-            orderId: d.id, tiramizooId: t.qrCode || d.id,
+            orderId: shortId, tiramizooId: t.qrCode || shortId,
             companyName: t.companyName || '', address: t.address || '',
-            postCode: t.postalCode || '', city: '', source: 'app',
-            windowStart: '', windowEnd: '', eta: '',
+            postCode: t.postalCode || '', city: t.city||'', source: 'app',
+            windowStart: t.time||'', windowEnd: '', eta: '',
             status: (t.status||'pending').toLowerCase(),
-            courierName: t.driverId || '', boxCount: t.numberOfBoxes || 1,
+            courierName: (t.driverName||t.driverId||'').split('@')[0],
+            boxCount: t.numberOfBoxes || 1,
+            proofImageUrl: t.proofImageUrl||'', signatureImageUrl: t.signatureImageUrl||'',
+            hasProof: t.hasProof||false, proofType: t.proofType||'',
+            proofTimestamp: t.proofTimestamp||0,
             isLate: false, date: t.date || '', notes: t.deliveryInstructions || '',
-            time: t.time || '', routeOrder: t.routeOrder || 0
+            time: t.time || '', routeOrder: t.routeOrder || 0,
+            kitchen: t.kitchen || ''
           };
         }).filter(o => {
           if(filterDate && o.date) {
-            // accept both dd.MM.yyyy and yyyy-MM-dd formats
-            const fd = filterDate.split('-').reverse().join('.'); // yyyy-mm-dd → dd.mm.yyyy
+            const fd = filterDate.split('-').reverse().join('.');
             if(o.date !== filterDate && o.date !== fd) return false;
           }
+          if(ordersFilter.kitchen !== 'all' && o.kitchen && o.kitchen.toLowerCase() !== ordersFilter.kitchen.toLowerCase()) return false;
           if(ordersFilter.status !== 'all' && o.status !== ordersFilter.status) return false;
           if(ordersFilter.courier !== 'all' && o.courierName !== ordersFilter.courier) return false;
           if(ordersFilter.search) {
@@ -4323,44 +4368,61 @@ async function renderCouriers() {
   const bodyEl = document.getElementById('content');
   bodyEl.innerHTML = '<div class="page"><div style="padding:60px;text-align:center;color:#9ca3af">Loading drivers…</div></div>';
 
-  // Load from Firestore drivers collection
+  const { getDocs, collection: FC, query: FQ, where: FW, orderBy: FOB } = window._firestoreModules || {};
   let drivers = [];
-  if (window._fbReady && window._fbDb) {
+  const driverMap = {}; // keyed by lowercase name prefix
+
+  const merge = (name, extra={}) => {
+    const key = (name||'').split('@')[0].toLowerCase().trim();
+    if(!key) return;
+    if(!driverMap[key]) driverMap[key] = {id:key, name:(name||'').split('@')[0], city:'Berlin', active:true, email:'', phone:'', car:'', plate:'', hasPassword:false, ...extra};
+    else Object.assign(driverMap[key], extra);
+  };
+
+  if(getDocs && window._fbDb) {
+    // 1. Firestore drivers collection (source of truth for profile)
     try {
-      const { getDocs } = await import('https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js');
-      const snap = await getDocs(window._fbCollection(window._fbDb,'drivers'));
-      snap.forEach(d => drivers.push({id: d.id, ...d.data()}));
-    } catch(e) {}
-  }
-  // Also load from MySQL drivers table
-  if (API_BASE) {
+      const snap = await getDocs(FC(window._fbDb,'drivers'));
+      snap.forEach(d => { const dt=d.data(); merge(dt.email||dt.name||d.id, {id:d.id,...dt}); });
+    } catch(e){}
+
+    // 2. Today's driver_locations — adds any driver who logged GPS today
     try {
-      const r = await fetch(`${API_BASE}/api/drivers`);
-      const rows = await r.json();
-      if (Array.isArray(rows)) {
-        rows.forEach(row => {
-          const exists = drivers.find(d => d.name && d.name.toLowerCase() === (row.name||'').toLowerCase());
-          if (!exists) drivers.push({id: row.id, name: row.name, city: row.kitchenName||'', active: true});
-        });
-      }
-    } catch(e) {}
+      const locSnap = await getDocs(FC(window._fbDb,'driver_locations'));
+      locSnap.forEach(d => {
+        const dt = d.data();
+        const online = dt.timestamp && (Date.now()-dt.timestamp < 2*60*60*1000); // active in last 2h
+        merge(d.id, {lastSeen: dt.timestamp, online, lat:dt.lat, lng:dt.lng});
+      });
+    } catch(e){}
+
+    // 3. Today's deliveries — ensures every dispatched driver appears
+    try {
+      const todayISO = new Date().toLocaleDateString('sv-SE',{timeZone:'Europe/Berlin'});
+      const dSnap = await getDocs(FQ(FC(window._fbDb,'deliveries'), FW('date','==',todayISO)));
+      const driverStats = {};
+      dSnap.forEach(doc => {
+        const dt = doc.data();
+        const drv = (dt.driverName||dt.driverId||'').split('@')[0].toLowerCase().trim();
+        if(!drv) return;
+        if(!driverStats[drv]) driverStats[drv] = {stops:0,delivered:0,city:''};
+        driverStats[drv].stops++;
+        if((dt.status||'').toUpperCase()==='DELIVERED') driverStats[drv].delivered++;
+        // Infer city from postal code: starts with 1=Berlin, 8=Munich
+        if(!driverStats[drv].city && dt.postalCode) {
+          driverStats[drv].city = dt.postalCode.startsWith('1') ? 'Berlin' : dt.postalCode.startsWith('8') ? 'Munich' : '';
+        }
+        const name = dt.driverName || dt.driverId || drv;
+        merge(name, {todayStops:driverStats[drv].stops, todayDelivered:driverStats[drv].delivered, city:driverStats[drv].city||'Berlin'});
+      });
+    } catch(e){}
   }
 
-  // If no drivers in Firestore yet, seed from our known drivers
-  if (drivers.length === 0) {
-    const seeds = [
-      {id:'samir',name:'Samir',city:'Berlin',phone:'',email:'samir@bellabona.com',car:'Mercedes Sprinter',plate:'',active:true},
-      {id:'ali1', name:'Ali1', city:'Berlin',phone:'',email:'ali1@bellabona.com', car:'VW Caddy',plate:'',active:true},
-      {id:'ali2', name:'Ali2', city:'Berlin',phone:'',email:'ali2@bellabona.com', car:'VW Caddy',plate:'',active:true},
-      {id:'martin',name:'Martin',city:'Berlin',phone:'',email:'martin@bellabona.com',car:'VW Transporter',plate:'',active:true},
-      {id:'packator1',name:'Packator1',city:'Berlin',phone:'',email:'',car:'',plate:'',active:true},
-      {id:'packator2',name:'Packator2',city:'Berlin',phone:'',email:'',car:'',plate:'',active:true},
-      {id:'piyush',name:'Piyush',city:'Berlin',phone:'',email:'piyush@bellabona.com',car:'VW Caddy',plate:'',active:true},
-      {id:'mykhaielo',name:'Mykhaielo',city:'Berlin',phone:'',email:'',car:'',plate:'',active:true},
-      {id:'jozef',name:'Jozef',city:'Berlin',phone:'',email:'',car:'',plate:'',active:true},
-      {id:'tasnim',name:'Tasnim',city:'Berlin',phone:'',email:'',car:'',plate:'',active:true},
-    ];
-    drivers = seeds;
+  drivers = Object.values(driverMap).sort((a,b)=>(b.todayStops||0)-(a.todayStops||0));
+  if(!drivers.length) {
+    // Absolute fallback
+    ['Samir','Ali1','Ali2','Ali3','Martin','Josef','Tasnim','Packator','Packator 2'].forEach(n=>merge(n,{city:'Berlin'}));
+    drivers = Object.values(driverMap);
   }
   window._allDrivers = drivers;
   _paintCouriers();
@@ -4386,28 +4448,45 @@ function _paintCouriers() {
   '<div style="overflow-x:auto">' +
   '<table style="width:100%;border-collapse:collapse">' +
   '<thead><tr style="background:#f9fafb">' +
-    ['Name','City','Phone','Email','Vehicle / Plate','Status',''].map(h=>'<th style="padding:10px 12px;font-size:12px;font-weight:600;color:#374151;text-align:left;border-bottom:2px solid #e5e7eb">'+h+'</th>').join('') +
+    ['Driver','City','Today\'s Progress','Phone','Email','Vehicle','Status','Actions'].map(h=>'<th style="padding:10px 12px;font-size:12px;font-weight:600;color:#374151;text-align:left;border-bottom:2px solid #e5e7eb">'+h+'</th>').join('') +
   '</tr></thead>' +
   '<tbody>' +
   drivers.map((d,i)=>{
     const initials = (d.name||'?').substring(0,2).toUpperCase();
     const isActive = d.active !== false;
-    return '<tr style="border-bottom:1px solid #f3f4f6">' +
+    const todayStops = d.todayStops || 0;
+    const todayDel = d.todayDelivered || 0;
+    const pct = todayStops ? Math.round(todayDel/todayStops*100) : 0;
+    const isOnline = d.online || false;
+    return '<tr style="border-bottom:1px solid #f3f4f6;cursor:pointer" onclick="window.location.hash=\'#dispatch\'" title="View in Dispatch">' +
       '<td style="padding:10px 12px"><div style="display:flex;align-items:center;gap:10px">' +
-        '<div style="width:36px;height:36px;border-radius:50%;background:'+( isActive?'#e85d0420':'#f3f4f6')+';color:'+( isActive?'#e85d04':'#9ca3af')+';display:flex;align-items:center;justify-content:center;font-weight:700;font-size:13px">'+initials+'</div>' +
-        '<span style="font-weight:600;font-size:14px">'+(d.name||'—')+'</span></div></td>' +
+        '<div style="position:relative">' +
+          '<div style="width:38px;height:38px;border-radius:50%;background:'+(isActive?'#1d4ed820':'#f3f4f6')+';color:'+(isActive?'#1d4ed8':'#9ca3af')+';display:flex;align-items:center;justify-content:center;font-weight:700;font-size:13px">'+initials+'</div>' +
+          (isOnline?'<div style="position:absolute;bottom:0;right:0;width:11px;height:11px;background:#10b981;border-radius:50%;border:2px solid #fff"></div>':'') +
+        '</div>' +
+        '<div><div style="font-weight:600;font-size:14px">'+(d.name||'—')+'</div>' +
+          (d.email?'<div style="font-size:11px;color:#9ca3af">'+d.email+'</div>':'') +
+        '</div>' +
+      '</div></td>' +
       '<td style="padding:10px 12px;font-size:13px;color:#6b7280">'+(d.city||'—')+'</td>' +
+      '<td style="padding:10px 12px;min-width:160px">' +
+        (todayStops>0
+          ? '<div style="font-size:12px;font-weight:600;color:#374151;margin-bottom:4px">'+todayDel+' / '+todayStops+' stops ('+pct+'%)</div>' +
+            '<div style="height:6px;background:#e5e7eb;border-radius:3px;overflow:hidden"><div style="width:'+pct+'%;height:100%;background:'+(pct===100?'#16a34a':'#1d4ed8')+';border-radius:3px"></div></div>'
+          : '<span style="font-size:12px;color:#9ca3af">No stops today</span>') +
+      '</td>' +
       '<td style="padding:10px 12px;font-size:13px">'+(d.phone||'—')+'</td>' +
-      '<td style="padding:10px 12px;font-size:13px;color:#6b7280">'+(d.email||'—')+'</td>' +
-      '<td style="padding:10px 12px;font-size:12px">'+(d.car||d.vehicle||'—')+(d.plate?' · '+d.plate:'')+'</td>' +
+      '<td style="padding:10px 12px;font-size:12px;color:#6b7280">'+(d.email||'—')+'</td>' +
+      '<td style="padding:10px 12px;font-size:12px">'+(d.car||d.vehicle||'—')+(d.plate?' · <b>'+d.plate+'</b>':'')+'</td>' +
       '<td style="padding:10px 12px">' +
-        '<label style="display:flex;align-items:center;gap:6px;cursor:pointer">' +
-        '<input type="checkbox"'+(isActive?' checked':'')+' onchange="toggleDriver(\''+d.id+'\',this.checked)" style="width:16px;height:16px;cursor:pointer">' +
-        '<span style="font-size:12px;color:'+( isActive?'#16a34a':'#9ca3af')+';font-weight:600">'+( isActive?'Active':'Off')+'</span>' +
-        '</label></td>' +
-      '<td style="padding:10px 12px">' +
-        '<button class="btn btn-sm" onclick="openEditDriverModal('+i+')">✏️ Edit</button> ' +
-        '<button class="btn btn-sm" style="background:'+(d.hasPassword?'#16a34a':'#dc2626')+';color:#fff;border-color:'+(d.hasPassword?'#16a34a':'#dc2626')+'" onclick="openPasswordModal(\''+d.id+'\',\''+d.name+'\')" title="'+(d.hasPassword?'Change Password':'Set Password')+'">🔑 '+(d.hasPassword?'Password':'Set PW')+'</button>' +
+        '<div style="display:flex;align-items:center;gap:6px">' +
+          '<div style="width:8px;height:8px;border-radius:50%;background:'+(isOnline?'#10b981':'#d1d5db')+'"></div>' +
+          '<span style="font-size:12px;color:'+(isOnline?'#10b981':'#6b7280')+';font-weight:600">'+(isOnline?'Online':'Offline')+'</span>' +
+        '</div>' +
+      '</td>' +
+      '<td style="padding:10px 12px" onclick="event.stopPropagation()">' +
+        '<button class="btn btn-sm" onclick="openEditDriverModal('+i+')" title="Edit driver">✏️ Edit</button> ' +
+        '<button class="btn btn-sm" style="background:'+(d.hasPassword?'#16a34a':'#dc2626')+';color:#fff;border-color:'+(d.hasPassword?'#16a34a':'#dc2626')+'" onclick="openPasswordModal(\''+d.id+'\',\''+d.name+'\')" title="'+(d.hasPassword?'Change':'Set')+' app password">🔑</button>' +
       '</td>' +
     '</tr>';
   }).join('') +
@@ -7562,7 +7641,7 @@ function _paintSettings() {
     '</div>' +
     '<div class="card"><div class="section-title">About Drive</div>' +
       '<table style="width:100%;font-size:13px"><tbody>' +
-        '<tr><td style="color:#6b7280;padding:5px 0;width:160px">Platform</td><td>Drive v2.2.0</td></tr>' +
+        '<tr><td style="color:#6b7280;padding:5px 0;width:160px">Platform</td><td>Drive v3.0.0</td></tr>' +
         '<tr><td style="color:#6b7280;padding:5px 0">Storage</td><td>Firebase Firestore</td></tr>' +
         '<tr><td style="color:#6b7280;padding:5px 0">Driver App</td><td>Android (Kotlin + Compose)</td></tr>' +
         '<tr><td style="color:#6b7280;padding:5px 0">Maps</td><td>Leaflet + OpenStreetMap</td></tr>' +
