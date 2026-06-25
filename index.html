@@ -13,7 +13,7 @@
 <script type="module">
 // Firebase for weekly templates & GPS
 import { initializeApp, getApps } from 'https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js';
-import { getFirestore, doc, getDoc, setDoc, collection } from 'https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js';
+import { getFirestore, doc, getDoc, setDoc, collection, getDocs, query, where, onSnapshot, writeBatch, deleteDoc, addDoc, orderBy } from 'https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js';
 import { getAuth, signInAnonymously } from 'https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js';
 const _fbCfg = {apiKey:"AIzaSyBr46XcXJPfxtxl6GpTmQPU7dPl68RuVXs",authDomain:"routing-22aad.firebaseapp.com",projectId:"routing-22aad"};
 const _fbApp = getApps().length ? getApps()[0] : initializeApp(_fbCfg);
@@ -26,6 +26,8 @@ window._fbGetDoc = getDoc;
 window._fbSetDoc = setDoc;
 window._fbCollection = collection;
 window._fbReady = true;
+// Expose all Firestore helpers for non-module code
+window._firestoreModules = { doc, getDoc, setDoc, collection, getDocs, query, where, onSnapshot, writeBatch, deleteDoc, addDoc, orderBy, getFirestore };
 </script>
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
@@ -1620,10 +1622,26 @@ async function lockAndDispatch() {
       await window._fbSetDoc(window._fbDoc(window._fbDb, 'driverRoutes', driverKey), route);
     }
 
-    // ── Write to 'deliveries' collection for Android app ──
-    // Collection: deliveries | Fields: id, driverId, qrCode, companyName, address, postalCode, deliveryInstructions, numberOfBoxes, status
+    // ── Write ONE order per stop to 'deliveries' collection ──────────────────
+    // Generate sequential order IDs: ORD-YYYYMMDD-001, ORD-YYYYMMDD-002 …
+    // First delete any existing orders for this date+kitchen to avoid duplicates
+    const { collection: fbColl, query: fbQuery, where: fbWhere, getDocs: fbGetDocs, deleteDoc, writeBatch } = window._firestoreModules || {};
+    if(fbGetDocs && deleteDoc) {
+      try {
+        const existSnap = await fbGetDocs(fbQuery(fbColl(window._fbDb,'deliveries'), fbWhere('date','==',dateStr), fbWhere('kitchen','==',kitchen)));
+        const delBatch = writeBatch(window._fbDb);
+        existSnap.forEach(d => delBatch.delete(d.ref));
+        await delBatch.commit();
+      } catch(e3) { console.warn('Could not clean old orders:', e3); }
+    }
+
+    const datePart = dateStr.replace(/-/g,''); // 20260625
+    let orderSeq = 1;
+    const writeBatchObj = writeBatch ? writeBatch(window._fbDb) : null;
     const writePromises = [];
+
     for (const [driver, route] of Object.entries(driverRoutes)) {
+      // Resolve driver email for Android app login matching
       let driverId = driver;
       try {
         const dSnap = await window._fbGetDoc(window._fbDoc(window._fbDb, 'drivers', driver.toLowerCase().replace(/\s+/g,'_')));
@@ -1631,28 +1649,50 @@ async function lockAndDispatch() {
       } catch(e2) {}
 
       for (const stop of route.stops) {
-        const boxes = stop.boxIds && stop.boxIds.length > 0 ? stop.boxIds : [stop.branchId + '_box0'];
-        for (let i = 0; i < boxes.length; i++) {
-          const qrCode = boxes[i] || (dateStr + '_' + stop.branchId + '_' + i);
-          const docId = (dateStr + '_' + stop.branchId + '_' + i).replace(/[^a-zA-Z0-9_-]/g, '_').substring(0,100);
-          writePromises.push(
-            window._fbSetDoc(window._fbDoc(window._fbDb, 'deliveries', docId), {
-              id: docId, driverId, driverName: driver,
-              qrCode,
-              companyName:          stop.company,
-              address:              stop.address || '',
-              postalCode:           stop.postCode || '',
-              deliveryInstructions: stop.note || stop.deliveryInfo || '',
-              numberOfBoxes:        stop.orderCount || 1,
-              sequence:             stop.sequence || 1,
-              date: dateStr, kitchen, status: 'PENDING', dispatchedAt: now,
-            })
-          );
+        // Clean order ID: ORD-20260625-001
+        const orderId = 'ORD-' + datePart + '-' + String(orderSeq).padStart(3,'0');
+        orderSeq++;
+
+        // Primary QR code = first box ID or branchId
+        const primaryQr = (stop.boxIds && stop.boxIds[0]) || stop.branchId || orderId;
+
+        const docData = {
+          id: orderId,
+          orderId,
+          driverId,
+          driverName: driver,
+          qrCode: primaryQr,
+          boxIds: stop.boxIds || [],
+          companyName: stop.company,
+          address: stop.address || '',
+          postalCode: stop.postCode || '',
+          city: stop.city || '',
+          deliveryInstructions: stop.note || stop.deliveryInfo || '',
+          numberOfBoxes: stop.orderCount || (stop.boxIds ? stop.boxIds.length : 1) || 1,
+          routeOrder: stop.sequence || orderSeq,
+          sequence: stop.sequence || orderSeq,
+          date: dateStr,
+          kitchen,
+          status: 'PENDING',
+          dispatchedAt: now,
+          createdAt: now,
+        };
+
+        if(writeBatchObj) {
+          writeBatchObj.set(window._fbDoc(window._fbDb, 'deliveries', orderId), docData);
+        } else {
+          writePromises.push(window._fbSetDoc(window._fbDoc(window._fbDb, 'deliveries', orderId), docData));
         }
       }
     }
-    await Promise.all(writePromises);
-    console.log('Android deliveries written:', writePromises.length, 'docs to Firestore deliveries collection');
+
+    if(writeBatchObj) {
+      await writeBatchObj.commit();
+      console.log('Orders written via batch:', orderSeq - 1, 'orders to Firestore deliveries collection');
+    } else {
+      await Promise.all(writePromises);
+      console.log('Orders written:', writePromises.length, 'orders to Firestore deliveries collection');
+    }
 
     btn.disabled=false; btn.textContent='🔒 Lock & Dispatch';
     const el = document.getElementById('plan-msg');
