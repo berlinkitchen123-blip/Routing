@@ -442,6 +442,12 @@ let alerts = [
 ];
 
 function route() {
+  // Clean up real-time listeners from previous page to avoid stale updates
+  if(window._dispatchUnsubDeliveries) { window._dispatchUnsubDeliveries(); window._dispatchUnsubDeliveries=null; }
+  if(window._dispatchUnsubDriverLocs) { window._dispatchUnsubDriverLocs(); window._dispatchUnsubDriverLocs=null; }
+  if(window._trackingUnsubscribe) { window._trackingUnsubscribe(); window._trackingUnsubscribe=null; }
+  if(window._dashUnsubDeliveries) { window._dashUnsubDeliveries(); window._dashUnsubDeliveries=null; }
+
   const hash = window.location.hash || '#dashboard';
   document.getElementById('page-title').textContent = PAGE_TITLES[hash] || 'Dashboard';
   buildNav();
@@ -539,50 +545,132 @@ function genStops(r) {
 // ============================================================
 // DASHBOARD
 // ============================================================
-function renderDashboard() {
-  const routes = dashboardTab==='Munich'?MUNICH_ROUTES:dashboardTab==='Berlin'?BERLIN_ROUTES:ALL_ROUTES;
-  const totalStops = routes.reduce((s,r)=>s+r.stops,0);
-  const totalBoxes = routes.reduce((s,r)=>s+r.boxes,0);
-  const totalWeight = routes.reduce((s,r)=>s+r.weight,0);
-  const totalLate = routes.reduce((s,r)=>s+r.late,0);
-  const delivered = totalStops-totalLate;
-  const delivPct = totalStops?Math.round(delivered/totalStops*100):0;
+async function renderDashboard() {
+  const today = new Date().toLocaleDateString('en-CA'); // yyyy-mm-dd
 
   document.getElementById('content').innerHTML =
   '<div class="page">' +
   '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px">' +
-  '<div class="page-header" style="margin-bottom:0"><h2>Dashboard</h2><p>Live delivery overview</p></div>' +
-  '<div style="display:flex;gap:6px">' +
-  ['All','Munich','Berlin'].map(t=>'<button class="btn btn-sm'+(dashboardTab===t?' btn-primary':'')+'" onclick="setDashTab(\''+t+'\')">'+t+'</button>').join('') +
+  '<div class="page-header" style="margin-bottom:0"><h2>Dashboard</h2><p id="dash-subtitle">Loading live data…</p></div>' +
+  '<div style="display:flex;gap:6px;align-items:center">' +
+  '<span id="dash-live-dot" style="width:8px;height:8px;border-radius:50%;background:#9ca3af;display:inline-block"></span>' +
+  '<span id="dash-live-label" style="font-size:12px;color:#6b7280">Connecting…</span>' +
   '</div></div>' +
-
-  '<div class="glance-bar">' +
-  '<div class="glance-item"><div class="gl-label">Total Stops</div><div class="gl-value">'+totalStops+'</div></div>' +
-  '<div class="glance-item"><div class="gl-label">Delivered</div><div class="gl-value green">'+delivered+' <span style="font-size:14px">('+delivPct+'%)</span></div></div>' +
-  '<div class="glance-item"><div class="gl-label">Failed</div><div class="gl-value red">3</div></div>' +
-  '<div class="glance-item"><div class="gl-label">Pending</div><div class="gl-value amber">'+totalLate+'</div></div>' +
-  '<div class="glance-item"><div class="gl-label">Late</div><div class="gl-value red">'+totalLate+'</div></div>' +
-  '<div class="glance-item"><div class="gl-label">Couriers</div><div class="gl-value">'+routes.length+'</div></div>' +
-  '<div class="glance-item"><div class="gl-label">Total Boxes</div><div class="gl-value">'+totalBoxes+'</div></div>' +
-  '<div class="glance-item"><div class="gl-label">Total Weight</div><div class="gl-value">'+totalWeight+' <span style="font-size:14px">kg</span></div></div>' +
-  '</div>' +
-
+  '<div class="glance-bar" id="dash-glance-bar"><div style="padding:20px;color:#9ca3af">Loading…</div></div>' +
   '<div class="dashboard-layout">' +
-  '<div class="dashboard-left">' +
-  '<div class="section-title">Courier Routes ('+routes.length+')</div>' +
-  routes.map((r,i)=>mkRouteCard(r,i)).join('') +
-  '</div>' +
+  '<div class="dashboard-left" id="dash-driver-list"><div style="padding:20px;color:#9ca3af">Loading routes…</div></div>' +
   '<div class="dashboard-right">' +
-  '<div class="map-container"><div style="padding:8px 12px;background:#fff;border-bottom:1px solid #e5e7eb;display:flex;align-items:center;font-size:13px;font-weight:600;color:#374151">Live Map<span id="live-map-badge" style="display:none" class="live-badge"><span class="live-dot"></span>LIVE</span></div><div id="leaflet-map" style="height:calc(100% - 37px)"></div></div>' +
-  '<div class="card"><div class="section-title">Legend</div>' +
-  '<div style="display:grid;grid-template-columns:1fr 1fr;gap:6px">' +
-  routes.slice(0,10).map(r=>'<div style="display:flex;align-items:center;gap:6px;font-size:12px"><span style="width:10px;height:10px;border-radius:50%;background:'+r.color+';display:inline-block;flex-shrink:0"></span>'+r.name+'</div>').join('') +
-  '</div></div>' +
-  '</div>' +
-  '</div>' +
-  '</div>';
+  '<div class="map-container"><div style="padding:8px 12px;background:#fff;border-bottom:1px solid #e5e7eb;display:flex;align-items:center;font-size:13px;font-weight:600;color:#374151">Live Map <span style="margin-left:8px;font-size:10px;background:#10b981;color:#fff;padding:1px 6px;border-radius:8px" id="dash-map-badge" style="display:none">LIVE</span></div><div id="leaflet-map" style="height:calc(100% - 37px)"></div></div>' +
+  '</div></div></div>';
 
-  setTimeout(()=>initDashMap(routes),100);
+  setTimeout(()=>initDashMap([]),100);
+
+  if(!window._fbReady || !window._fbDb) return;
+  const { onSnapshot, collection: fbColl, query: fbQ, where: fbW } = window._firestoreModules||{};
+  if(!onSnapshot) return;
+
+  // Real-time listener on today's deliveries
+  const unsub = onSnapshot(
+    fbQ(fbColl(window._fbDb,'deliveries'), fbW('date','==',today)),
+    (snap) => {
+      const all = snap.docs.map(d=>({id:d.id,...d.data()}));
+      const total = all.length;
+      const delivered = all.filter(d=>d.status==='DELIVERED').length;
+      const pending = all.filter(d=>d.status==='PENDING').length;
+      const failed = all.filter(d=>d.status==='FAILED').length;
+      const pct = total ? Math.round(delivered/total*100) : 0;
+
+      // Group by driver
+      const byDriver = {};
+      all.forEach(d => {
+        const dr = d.driverName || d.driverId || 'Unknown';
+        if(!byDriver[dr]) byDriver[dr] = [];
+        byDriver[dr].push(d);
+      });
+
+      // Update glance bar
+      const gb = document.getElementById('dash-glance-bar');
+      if(gb) gb.innerHTML =
+        '<div class="glance-item"><div class="gl-label">Total Orders</div><div class="gl-value">'+total+'</div></div>' +
+        '<div class="glance-item"><div class="gl-label">Delivered</div><div class="gl-value green">'+delivered+' <span style="font-size:14px">('+pct+'%)</span></div></div>' +
+        '<div class="glance-item"><div class="gl-label">Pending</div><div class="gl-value amber">'+pending+'</div></div>' +
+        '<div class="glance-item"><div class="gl-label">Failed</div><div class="gl-value red">'+failed+'</div></div>' +
+        '<div class="glance-item"><div class="gl-label">Couriers</div><div class="gl-value">'+Object.keys(byDriver).length+'</div></div>' +
+        '<div class="glance-item"><div class="gl-label">Date</div><div class="gl-value" style="font-size:14px">'+today+'</div></div>';
+
+      // Update driver list
+      const COLORS = ['#e85d04','#3b82f6','#10b981','#8b5cf6','#f59e0b','#ef4444','#06b6d4','#ec4899'];
+      const dl = document.getElementById('dash-driver-list');
+      if(dl) dl.innerHTML =
+        '<div class="section-title" style="margin-bottom:10px">Today\'s Couriers ('+Object.keys(byDriver).length+')</div>' +
+        Object.entries(byDriver).map(([driver, stops], idx) => {
+          const del = stops.filter(s=>s.status==='DELIVERED').length;
+          const tot = stops.length;
+          const dpct = tot ? Math.round(del/tot*100) : 0;
+          const color = COLORS[idx%COLORS.length];
+          return '<div class="route-card" style="margin-bottom:10px">' +
+            '<div class="route-card-header" onclick="toggleRC('+idx+')" style="display:flex;align-items:center;gap:10px;padding:12px 16px;cursor:pointer">' +
+            '<div style="width:36px;height:36px;border-radius:50%;background:'+color+'20;color:'+color+';display:flex;align-items:center;justify-content:center;font-weight:700">'+driver.substring(0,2).toUpperCase()+'</div>' +
+            '<div style="flex:1">' +
+              '<div style="font-weight:600;font-size:13px">'+driver+'</div>' +
+              '<div style="font-size:11px;color:#6b7280">'+tot+' stops · '+del+' delivered</div>' +
+              '<div class="progress-bar" style="margin-top:4px"><div class="progress-fill" style="width:'+dpct+'%;background:'+color+'"></div></div>' +
+            '</div>' +
+            '<span id="rc-arrow-'+idx+'" style="color:#9ca3af;font-size:11px;transition:transform 0.2s">▼</span>' +
+            '</div>' +
+            '<div class="route-card-body" id="rc-body-'+idx+'">' +
+            '<table style="width:100%"><thead><tr><th>#</th><th>Company</th><th>Address</th><th>Boxes</th><th>Status</th></tr></thead><tbody>' +
+            stops.sort((a,b)=>(a.routeOrder||0)-(b.routeOrder||0)).map((s,si)=>
+              '<tr onclick="openOD(\''+s.id+'\',\'app\')" style="cursor:pointer">' +
+              '<td style="color:#9ca3af;font-size:12px">'+(si+1)+'</td>' +
+              '<td><b style="font-size:12px">'+s.companyName+'</b></td>' +
+              '<td style="font-size:11px;color:#6b7280">'+s.address+'</td>' +
+              '<td style="text-align:center">'+s.numberOfBoxes+'</td>' +
+              '<td>'+badge((s.status||'pending').toLowerCase())+'</td>' +
+              '</tr>'
+            ).join('') +
+            '</tbody></table></div></div>';
+        }).join('') ||
+        '<div style="color:#9ca3af;padding:20px;text-align:center">No orders dispatched today yet.<br><a href="#planning" onclick="window.location.hash=\'#planning\'">Go to Planning →</a></div>';
+
+      // Update live indicator
+      const dot = document.getElementById('dash-live-dot');
+      const lbl = document.getElementById('dash-live-label');
+      const sub = document.getElementById('dash-subtitle');
+      if(dot) dot.style.background='#10b981';
+      if(lbl) lbl.textContent='Live · '+new Date().toLocaleTimeString('de-DE',{hour:'2-digit',minute:'2-digit',second:'2-digit'});
+      if(sub) sub.textContent = 'Today · '+pct+'% delivered · '+total+' total orders';
+
+      // Put geocoded stop markers on map
+      _updateDashMapStops(all);
+    }
+  );
+  // Store unsub so it can be cleaned up on nav away
+  window._dashUnsubDeliveries = unsub;
+}
+
+// Push geocoded delivery stops onto the dashboard map
+function _updateDashMapStops(deliveries) {
+  if(!window._dashMap) return;
+  if(window._dashStopMarkers) window._dashStopMarkers.forEach(m=>m.remove());
+  window._dashStopMarkers = [];
+  const COLORS = ['#e85d04','#3b82f6','#10b981','#8b5cf6','#f59e0b','#ef4444','#06b6d4','#ec4899'];
+  const driverColors = {};
+  let colorIdx = 0;
+  deliveries.forEach(d => {
+    if(!d.lat || !d.lng) return;
+    if(!driverColors[d.driverId]) driverColors[d.driverId] = COLORS[colorIdx++%COLORS.length];
+    const color = d.status==='DELIVERED' ? '#10b981' : driverColors[d.driverId];
+    const icon = L.divIcon({
+      className:'',
+      html:'<div style="background:'+color+';width:10px;height:10px;border-radius:50%;border:2px solid #fff;box-shadow:0 1px 4px rgba(0,0,0,0.4)"></div>',
+      iconSize:[10,10],iconAnchor:[5,5]
+    });
+    const m = L.marker([d.lat,d.lng],{icon})
+      .addTo(window._dashMap)
+      .bindPopup('<b>'+d.companyName+'</b><br>'+d.address+'<br><span style="color:'+(d.status==='DELIVERED'?'#10b981':'#f59e0b')+'">'+d.status+'</span>');
+    window._dashStopMarkers.push(m);
+  });
 }
 
 function setDashTab(t) { dashboardTab=t; renderDashboard(); }
@@ -1694,6 +1782,10 @@ async function lockAndDispatch() {
       console.log('Orders written:', writePromises.length, 'orders to Firestore deliveries collection');
     }
 
+    // ── Geocode every stop address using Nominatim (free, no key) ─────────
+    // Run geocoding in background after batch commit — don't block dispatch
+    _geocodeDeliveries(dateStr, kitchen);
+
     btn.disabled=false; btn.textContent='🔒 Lock & Dispatch';
     const el = document.getElementById('plan-msg');
     if (el) el.innerHTML = '<div style="background:#fef2f2;border:1px solid #fecaca;border-radius:8px;padding:10px 14px;font-size:13px;color:#dc2626;margin-bottom:8px">🔒 <b>Plan locked & dispatched</b> for '+dateStr+' · '+assigned.length+' drivers notified · <a href="#dispatch" onclick="window.location.hash=\'#dispatch\'" style="color:#dc2626">View Dispatch Monitor →</a></div>';
@@ -1704,90 +1796,173 @@ async function lockAndDispatch() {
   }
 }
 
-// ── DISPATCH MONITOR ──────────────────────────────────────────
+// ── Geocode deliveries via Nominatim (OSM, free, no key) ─────────────────
+async function _geocodeDeliveries(dateStr, kitchen) {
+  const { collection: fbColl, query: fbQ, where: fbW, getDocs: fbGet, updateDoc, doc: fbDocFn } = window._firestoreModules || {};
+  if(!fbGet || !updateDoc) return;
+  try {
+    const snap = await fbGet(fbQ(fbColl(window._fbDb,'deliveries'), fbW('date','==',dateStr), fbW('kitchen','==',kitchen)));
+    for(const docSnap of snap.docs) {
+      const d = docSnap.data();
+      if(d.lat && d.lng) continue; // already geocoded
+      const addr = [d.address, d.postalCode, d.city, 'Germany'].filter(Boolean).join(', ');
+      try {
+        // Nominatim rate limit: 1 req/sec
+        await new Promise(r=>setTimeout(r,1100));
+        const resp = await fetch('https://nominatim.openstreetmap.org/search?format=json&limit=1&q='+encodeURIComponent(addr), {
+          headers:{'User-Agent':'BellaBonaRoutingApp/1.0'}
+        });
+        const results = await resp.json();
+        if(results && results[0]) {
+          const lat = parseFloat(results[0].lat);
+          const lng = parseFloat(results[0].lon);
+          await updateDoc(fbDocFn(window._fbDb,'deliveries',docSnap.id), { lat, lng });
+          console.log('[Geocode]', d.companyName, '→', lat, lng);
+        }
+      } catch(ge) { console.warn('[Geocode] failed for', addr, ge); }
+    }
+    console.log('[Geocode] Done for', dateStr);
+  } catch(e) { console.warn('[Geocode] Error', e); }
+}
+
+// ── DISPATCH MONITOR — real-time via onSnapshot ───────────────
+let _dispatchUnsubDeliveries = null;
+let _dispatchUnsubDriverLocs = null;
+
 async function renderDispatch(selectedDate) {
-  // Preserve selected date from dropdown if not passed
-  if (!selectedDate) {
-    selectedDate = document.getElementById('dispatch-date')?.value || null;
-  }
+  // Stop previous listeners when switching dates
+  if(_dispatchUnsubDeliveries) { _dispatchUnsubDeliveries(); _dispatchUnsubDeliveries=null; }
+  if(_dispatchUnsubDriverLocs) { _dispatchUnsubDriverLocs(); _dispatchUnsubDriverLocs=null; }
+
+  if (!selectedDate) selectedDate = document.getElementById('dispatch-date')?.value || null;
   document.getElementById('content').innerHTML = '<div class="page"><div style="padding:40px;text-align:center;color:#9ca3af">Loading dispatch…</div></div>';
   if (!window._fbReady || !window._fbDb) return;
 
-  try {
-    const { getDocs } = await import('https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js');
+  const { getDocs, onSnapshot, collection: fbColl, query: fbQ, where: fbW } = window._firestoreModules || {};
+  if(!getDocs) return;
 
-    // Load recent dispatches
+  try {
     const dispSnap = await getDocs(window._fbCollection(window._fbDb,'dispatches'));
     const dispatches = [];
     dispSnap.forEach(d => dispatches.push({id:d.id,...d.data()}));
     dispatches.sort((a,b)=>b.date.localeCompare(a.date));
 
-    // Use selected date or default to most recent
-    const selected = selectedDate
-      ? dispatches.find(d => d.date === selectedDate) || dispatches[0]
-      : dispatches[0];
-    const latest = selected;
-    let routesHtml = '<div style="color:#9ca3af;text-align:center;padding:40px">No dispatched routes yet. Lock a plan first.</div>';
+    const selected = selectedDate ? (dispatches.find(d=>d.date===selectedDate)||dispatches[0]) : dispatches[0];
 
-    if (latest) {
-      const routeSnap = await getDocs(window._fbCollection(window._fbDb,'driverRoutes'));
-      const routes = [];
-      routeSnap.forEach(d => { const r=d.data(); if(r.date===latest.date&&r.kitchen===latest.kitchen) routes.push({id:d.id,...r}); });
-
-      const STATUS_COLORS = { pending:'#f59e0b', confirmed:'#3b82f6', in_progress:'#8b5cf6', completed:'#10b981' };
-      const STATUS_LABELS = { pending:'⏳ Pending', confirmed:'✅ Confirmed', in_progress:'🚗 In Progress', completed:'🎉 Completed' };
-
-      routesHtml = routes.map(route => {
-        const total = route.stops?.length || 0;
-        const done = route.stops?.filter(s=>s.status==='delivered').length || 0;
-        const color = STATUS_COLORS[route.status] || '#9ca3af';
-        const label = STATUS_LABELS[route.status] || route.status;
-        const pct = total > 0 ? Math.round(done/total*100) : 0;
-        const driverAppUrl = window.location.origin + window.location.pathname + '?driver=' + encodeURIComponent(route.driver) + '&date=' + route.date + '&kitchen=' + route.kitchen + '#driver';
-        return '<div style="background:#fff;border:1px solid #e5e7eb;border-radius:10px;padding:16px;margin-bottom:12px">' +
-          '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;flex-wrap:wrap;gap:8px">' +
-            '<div style="display:flex;align-items:center;gap:10px">' +
-              '<div style="width:40px;height:40px;border-radius:50%;background:'+color+'20;color:'+color+';display:flex;align-items:center;justify-content:center;font-size:16px;font-weight:700">'+route.driver.substring(0,2).toUpperCase()+'</div>' +
-              '<div><div style="font-weight:700;font-size:15px">'+route.driver+'</div>' +
-              '<div style="font-size:12px;color:#6b7280">'+total+' stops · '+route.date+'</div></div>' +
-            '</div>' +
-            '<div style="display:flex;align-items:center;gap:8px">' +
-              '<span style="background:'+color+'20;color:'+color+';padding:4px 10px;border-radius:20px;font-size:12px;font-weight:600">'+label+'</span>' +
-              '<a href="'+driverAppUrl+'" target="_blank" style="background:#1a1a2e;color:#fff;padding:5px 12px;border-radius:6px;font-size:12px;text-decoration:none;font-weight:600">📱 Open Driver App</a>' +
-            '</div>' +
-          '</div>' +
-          '<div style="background:#f9fafb;border-radius:6px;overflow:hidden;margin-bottom:8px">' +
-            '<div style="background:'+color+';height:6px;width:'+pct+'%;transition:width 0.5s"></div>' +
-          '</div>' +
-          '<div style="display:flex;gap:12px;flex-wrap:wrap">' +
-          (route.stops||[]).map(s =>
-            '<div style="background:'+(s.status==='delivered'?'#f0fdf4':s.status==='scanned'?'#eff6ff':'#f9fafb')+';border:1px solid '+(s.status==='delivered'?'#bbf7d0':s.status==='scanned'?'#bfdbfe':'#e5e7eb')+';border-radius:6px;padding:6px 10px;font-size:11px;min-width:120px">' +
-              '<div style="font-weight:600">'+s.sequence+'. '+shortName(s.company)+'</div>' +
-              '<div style="color:#6b7280">'+s.orderCount+' box'+(s.orderCount>1?'es':'')+'</div>' +
-              '<div style="color:'+(s.status==='delivered'?'#16a34a':s.status==='scanned'?'#2563eb':'#9ca3af')+';font-size:10px">'+
-                (s.status==='delivered'?'✅ Delivered':s.status==='scanned'?'📷 Scanned':'⏳ Pending')+
-              '</div>' +
-            '</div>'
-          ).join('') +
-          '</div></div>';
-      }).join('') || '<div style="color:#9ca3af;text-align:center;padding:20px">No routes for '+latest.date+'</div>';
-    }
-
+    // ── Render the chrome (header, date picker) once ──
     document.getElementById('content').innerHTML =
       '<div class="page">' +
-      '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:20px;flex-wrap:wrap;gap:12px">' +
+      '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;flex-wrap:wrap;gap:12px">' +
         '<div><h2 style="font-size:22px;font-weight:700">🚚 Dispatch Monitor</h2>' +
-        '<p style="color:#6b7280;font-size:14px">Real-time driver confirmation & delivery tracking</p></div>' +
-        '<div style="display:flex;gap:8px">' +
+        '<p style="color:#6b7280;font-size:14px" id="dispatch-live-label">Connecting to live updates…</p></div>' +
+        '<div style="display:flex;gap:8px;align-items:center">' +
+          '<span id="dispatch-live-dot" style="display:inline-block;width:8px;height:8px;border-radius:50%;background:#9ca3af"></span>' +
           '<select id="dispatch-date" onchange="renderDispatch(this.value)" style="border:1px solid #d1d5db;border-radius:7px;padding:6px 12px;font-size:13px">' +
           dispatches.slice(0,10).map(d=>'<option value="'+d.date+'"'+(selected&&d.date===selected.date?' selected':'')+'>'+d.date+' ('+d.kitchen+')</option>').join('') +
           '</select>' +
-          '<button onclick="renderDispatch()" class="btn">↻ Refresh</button>' +
         '</div>' +
       '</div>' +
       (selected ? '<div style="background:#fef9c3;border:1px solid #fde68a;border-radius:8px;padding:10px 14px;font-size:13px;color:#92400e;margin-bottom:16px">🔒 Locked: <b>'+selected.date+'</b> ('+selected.kitchen+') · '+selected.drivers.length+' drivers · '+(selected.totalStops||0)+' stops · Dispatched at '+(selected.lockedAt?new Date(selected.lockedAt).toLocaleTimeString('de-DE',{hour:'2-digit',minute:'2-digit'}):'—')+'</div>' : '') +
-      routesHtml +
+      '<div id="dispatch-summary-bar" style="display:flex;gap:12px;margin-bottom:16px;flex-wrap:wrap"></div>' +
+      '<div id="dispatch-routes-container">'+
+        (selected ? '' : '<div style="color:#9ca3af;text-align:center;padding:40px">No dispatched routes yet. Lock a plan first.</div>') +
+      '</div>' +
       '</div>';
+
+    if(!selected) return;
+
+    // ── Cached delivery status by orderId ──
+    const _deliveryStatus = {}; // orderId → {status, proofTimestamp, proofType}
+
+    function _renderRouteCard(route, deliveries) {
+      const driverId = route.driver;
+      // Merge live delivery status from Firestore into route stops
+      const stops = (route.stops||[]).map(s => {
+        const match = deliveries.find(d => d.driverId===driverId && (d.companyName===s.company||d.orderId===s.orderId));
+        const liveStatus = match ? (match.status||'PENDING').toUpperCase() : (s.status||'pending').toUpperCase();
+        return {...s, liveStatus, match};
+      });
+
+      const total = stops.length;
+      const done = stops.filter(s=>s.liveStatus==='DELIVERED').length;
+      const inProg = stops.filter(s=>['ARRIVED','SCANNED'].includes(s.liveStatus)).length;
+      const pct = total>0 ? Math.round(done/total*100) : 0;
+      const color = done===total&&total>0 ? '#10b981' : inProg>0 ? '#8b5cf6' : done>0 ? '#3b82f6' : '#f59e0b';
+      const statusLabel = done===total&&total>0 ? '🎉 Completed' : inProg>0 ? '🚗 In Progress' : done>0 ? '📦 Delivering' : '⏳ Pending';
+
+      return '<div id="dispatch-driver-'+driverId.replace(/[^a-z0-9]/gi,'_')+'" style="background:#fff;border:1px solid #e5e7eb;border-radius:10px;padding:16px;margin-bottom:12px">' +
+        '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;flex-wrap:wrap;gap:8px">' +
+          '<div style="display:flex;align-items:center;gap:10px">' +
+            '<div style="width:40px;height:40px;border-radius:50%;background:'+color+'20;color:'+color+';display:flex;align-items:center;justify-content:center;font-size:16px;font-weight:700">'+driverId.substring(0,2).toUpperCase()+'</div>' +
+            '<div><div style="font-weight:700;font-size:15px">'+driverId+'</div>' +
+            '<div style="font-size:12px;color:#6b7280">'+total+' stops · '+done+' delivered · '+route.date+'</div></div>' +
+          '</div>' +
+          '<span style="background:'+color+'20;color:'+color+';padding:4px 12px;border-radius:20px;font-size:12px;font-weight:600">'+statusLabel+'</span>' +
+        '</div>' +
+        '<div style="background:#f3f4f6;border-radius:6px;overflow:hidden;margin-bottom:10px;height:8px">' +
+          '<div style="background:'+color+';height:8px;width:'+pct+'%;transition:width 0.6s;border-radius:6px"></div>' +
+        '</div>' +
+        '<div style="font-size:11px;color:#6b7280;margin-bottom:8px">'+done+' / '+total+' delivered ('+pct+'%)</div>' +
+        '<div style="display:flex;gap:8px;flex-wrap:wrap">' +
+        stops.map(s => {
+          const st = s.liveStatus;
+          const bg = st==='DELIVERED'?'#f0fdf4':st==='ARRIVED'||st==='SCANNED'?'#eff6ff':'#f9fafb';
+          const border = st==='DELIVERED'?'#bbf7d0':st==='ARRIVED'||st==='SCANNED'?'#bfdbfe':'#e5e7eb';
+          const statusTxt = st==='DELIVERED'?'✅ Delivered':st==='ARRIVED'?'📍 Arrived':st==='SCANNED'?'📷 Scanned':'⏳ Pending';
+          const timeStr = s.match?.proofTimestamp ? '<br><span style="color:#6b7280">'+new Date(s.match.proofTimestamp).toLocaleTimeString('de-DE',{hour:'2-digit',minute:'2-digit'})+'</span>' : '';
+          return '<div onclick="openOD(\''+( s.match?.orderId||s.match?.id||'')+'\',\'app\')" style="background:'+bg+';border:1px solid '+border+';border-radius:6px;padding:6px 10px;font-size:11px;min-width:110px;cursor:'+(s.match?'pointer':'default')+'">' +
+            '<div style="font-weight:600">'+s.sequence+'. '+(s.company||'').substring(0,18)+'</div>' +
+            '<div style="color:#6b7280">'+(s.orderCount||1)+' box'+(s.orderCount>1?'es':'')+'</div>' +
+            '<div style="color:'+(st==='DELIVERED'?'#16a34a':st==='ARRIVED'||st==='SCANNED'?'#2563eb':'#9ca3af')+';font-size:10px">'+statusTxt+timeStr+'</div>' +
+            '</div>';
+        }).join('')+
+        '</div></div>';
+    }
+
+    // ── Load initial routes ──
+    const routeSnap = await getDocs(window._fbCollection(window._fbDb,'driverRoutes'));
+    const routes = [];
+    routeSnap.forEach(d => { const r=d.data(); if(r.date===selected.date&&r.kitchen===selected.kitchen) routes.push({id:d.id,...r}); });
+
+    // ── Real-time listener on deliveries for selected date ──
+    if(onSnapshot && fbQ && fbW) {
+      _dispatchUnsubDeliveries = onSnapshot(
+        fbQ(fbColl(window._fbDb,'deliveries'), fbW('date','==',selected.date), fbW('kitchen','==',selected.kitchen)),
+        (snap) => {
+          const deliveries = snap.docs.map(d=>({id:d.id,...d.data()}));
+
+          // Update live dot
+          const dot = document.getElementById('dispatch-live-dot');
+          const lbl = document.getElementById('dispatch-live-label');
+          if(dot) dot.style.background='#10b981';
+          if(lbl) {
+            const totalDel = deliveries.filter(d=>d.status==='DELIVERED').length;
+            lbl.textContent = 'Live · '+totalDel+' / '+deliveries.length+' delivered · Last update '+new Date().toLocaleTimeString('de-DE',{hour:'2-digit',minute:'2-digit',second:'2-digit'});
+          }
+
+          // Update summary bar
+          const sumBar = document.getElementById('dispatch-summary-bar');
+          if(sumBar) {
+            const pend = deliveries.filter(d=>d.status==='PENDING').length;
+            const deliv = deliveries.filter(d=>d.status==='DELIVERED').length;
+            const failed = deliveries.filter(d=>d.status==='FAILED').length;
+            sumBar.innerHTML =
+              '<div style="background:#fef9c3;border:1px solid #fde68a;border-radius:8px;padding:8px 16px;font-size:13px;font-weight:600;color:#92400e">⏳ Pending: '+pend+'</div>'+
+              '<div style="background:#f0fdf4;border:1px solid #bbf7d0;border-radius:8px;padding:8px 16px;font-size:13px;font-weight:600;color:#166534">✅ Delivered: '+deliv+'</div>'+
+              (failed>0?'<div style="background:#fef2f2;border:1px solid #fecaca;border-radius:8px;padding:8px 16px;font-size:13px;font-weight:600;color:#991b1b">❌ Failed: '+failed+'</div>':'');
+          }
+
+          // Re-render route cards in-place without touching anything else on page
+          const container = document.getElementById('dispatch-routes-container');
+          if(container) {
+            container.innerHTML = routes.length > 0
+              ? routes.map(r => _renderRouteCard(r, deliveries)).join('')
+              : '<div style="color:#9ca3af;text-align:center;padding:40px">No routes for '+selected.date+'</div>';
+          }
+        }
+      );
+    }
+
   } catch(e) {
     document.getElementById('content').innerHTML = '<div class="page"><div style="color:#dc2626;padding:20px">Error: '+e.message+'</div></div>';
   }
