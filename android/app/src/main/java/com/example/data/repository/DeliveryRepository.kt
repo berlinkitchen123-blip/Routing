@@ -223,6 +223,68 @@ class DeliveryRepository {
         }
     }
 
+    // Logs kitchen pickup with GPS location — creates a dedicated record in kitchenPickups/{date}/{driverId}
+    suspend fun logKitchenPickup(
+        driverId: String,
+        taskId: String,
+        lat: Double?,
+        lng: Double?,
+        accuracy: Float?,
+        address: String = ""
+    ) {
+        try {
+            val today = todayBerlin()
+            val ts = System.currentTimeMillis()
+            val record = mutableMapOf<String, Any>(
+                "driverId" to driverId,
+                "taskId" to taskId,
+                "timestamp" to ts,
+                "date" to today,
+                "address" to address,
+                "confirmedAt" to java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.getDefault()).apply {
+                    timeZone = java.util.TimeZone.getTimeZone("Europe/Berlin")
+                }.format(java.util.Date(ts))
+            )
+            if (lat != null) record["lat"] = lat
+            if (lng != null) record["lng"] = lng
+            if (accuracy != null) record["accuracy"] = accuracy
+
+            // Write to kitchenPickups collection
+            db?.collection("kitchenPickups")
+                ?.document(today)
+                ?.collection(driverId)
+                ?.add(record)
+                ?.await()
+
+            // Also update delivery doc with pickup GPS
+            val updateFields = mutableMapOf<String, Any>(
+                "status" to "DELIVERED",
+                "pickupTimestamp" to ts,
+                "pickupConfirmedAt" to record["confirmedAt"]!!
+            )
+            if (lat != null) updateFields["pickupLat"] = lat
+            if (lng != null) updateFields["pickupLng"] = lng
+            db?.collection("deliveries")?.document(taskId)
+                ?.update(updateFields)
+                ?.await()
+
+            // Also log as a driver event
+            logDriverAction(
+                driverId = driverId,
+                action = "KITCHEN_PICKUP",
+                taskId = taskId,
+                details = buildMap {
+                    put("address", address)
+                    if (lat != null) put("lat", lat)
+                    if (lng != null) put("lng", lng)
+                }
+            )
+            Log.d("DeliveryRepository", "Kitchen pickup logged for $driverId at $lat,$lng")
+        } catch (e: Exception) {
+            Log.e("DeliveryRepository", "Failed to log kitchen pickup", e)
+        }
+    }
+
     // Reports a delivery delay — writes to Firestore and updates driver_locations
     suspend fun reportDelay(
         driverId: String,

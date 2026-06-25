@@ -445,6 +445,7 @@ function route() {
   if(window._dispatchUnsubDriverLocs) { window._dispatchUnsubDriverLocs(); window._dispatchUnsubDriverLocs=null; }
   if(window._trackingUnsubscribe) { window._trackingUnsubscribe(); window._trackingUnsubscribe=null; }
   if(window._dashUnsubDeliveries) { window._dashUnsubDeliveries(); window._dashUnsubDeliveries=null; }
+  if(window._kitchenPickupUnsub) { window._kitchenPickupUnsub(); window._kitchenPickupUnsub=null; }
 
   const hash = window.location.hash || '#dashboard';
   document.getElementById('page-title').textContent = PAGE_TITLES[hash] || 'Dashboard';
@@ -1862,12 +1863,23 @@ async function renderDispatch(selectedDate) {
       '</div>' +
       (selected ? '<div style="background:#fef9c3;border:1px solid #fde68a;border-radius:8px;padding:10px 14px;font-size:13px;color:#92400e;margin-bottom:16px">🔒 Locked: <b>'+selected.date+'</b> ('+selected.kitchen+') · '+selected.drivers.length+' drivers · '+(selected.totalStops||0)+' stops · Dispatched at '+(selected.lockedAt?new Date(selected.lockedAt).toLocaleTimeString('de-DE',{hour:'2-digit',minute:'2-digit'}):'—')+'</div>' : '') +
       '<div id="dispatch-summary-bar" style="display:flex;gap:12px;margin-bottom:16px;flex-wrap:wrap"></div>' +
+      '<div style="background:#fffbeb;border:1px solid #fde68a;border-radius:10px;padding:14px 16px;margin-bottom:16px">' +
+        '<div style="font-weight:700;font-size:14px;margin-bottom:10px">🏠 Kitchen Pickup Confirmations <span id="dispatch-pickup-dot" style="display:inline-block;width:7px;height:7px;border-radius:50%;background:#9ca3af;margin-left:4px;vertical-align:middle"></span></div>' +
+        '<div id="dispatch-kitchen-pickups">Loading…</div>' +
+      '</div>' +
       '<div id="dispatch-routes-container">'+
         (selected ? '' : '<div style="color:#9ca3af;text-align:center;padding:40px">No dispatched routes yet. Lock a plan first.</div>') +
       '</div>' +
       '</div>';
 
     if(!selected) return;
+
+    // Load kitchen pickups live section
+    setTimeout(() => {
+      renderKitchenPickupsSection(selected.date, 'dispatch-kitchen-pickups');
+      const dot = document.getElementById('dispatch-pickup-dot');
+      if(dot) dot.style.background = '#10b981';
+    }, 100);
 
     // ── Cached delivery status by orderId ──
     const _deliveryStatus = {}; // orderId → {status, proofTimestamp, proofType}
@@ -3221,6 +3233,86 @@ function _updateTrialMapMarkers(progress) {
 }
 
 // ============================================================
+// KITCHEN PICKUPS — real-time per-driver pickup confirmation
+// ============================================================
+let _kitchenPickupUnsub = null;
+
+async function renderKitchenPickupsSection(date, containerId) {
+  const container = document.getElementById(containerId);
+  if(!container || !window._fbDb) return;
+  const { collection: fbColl, onSnapshot } = window._firestoreModules || {};
+  if(!onSnapshot) return;
+
+  if(_kitchenPickupUnsub) { _kitchenPickupUnsub(); _kitchenPickupUnsub = null; }
+
+  container.innerHTML = '<div style="color:#9ca3af;font-size:13px;padding:8px 0">Loading pickup confirmations…</div>';
+
+  // Listen to kitchenPickups/{date} subcollections for all drivers
+  // We'll query the top-level and listen per driver name from deliveries
+  const { getDocs, query: fbQ, where: fbW } = window._firestoreModules || {};
+  if(!getDocs) return;
+
+  // Get list of drivers for this date
+  const snap = await getDocs(fbQ(fbColl(window._fbDb,'deliveries'), fbW('date','==',date)));
+  const drivers = [...new Set(snap.docs.map(d=>d.data().driverId).filter(Boolean))];
+
+  const pickupsByDriver = {};
+  let listenersLeft = drivers.length;
+
+  if(drivers.length === 0) {
+    container.innerHTML = '<div style="color:#9ca3af;font-size:13px;padding:8px 0">No drivers dispatched for this date yet.</div>';
+    return;
+  }
+
+  const render = () => {
+    container.innerHTML =
+      '<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:12px;margin-bottom:4px">' +
+      drivers.map(driverId => {
+        const p = pickupsByDriver[driverId];
+        const shortName = driverId.split('@')[0];
+        if(!p) {
+          // No pickup yet
+          return '<div style="background:#fff;border:1px solid #e5e7eb;border-radius:10px;padding:14px 16px">' +
+            '<div style="display:flex;align-items:center;gap:10px">' +
+              '<div style="width:36px;height:36px;border-radius:50%;background:#fef3c7;color:#92400e;display:flex;align-items:center;justify-content:center;font-weight:700">'+shortName.substring(0,2).toUpperCase()+'</div>' +
+              '<div><div style="font-weight:600;font-size:14px">'+shortName+'</div>' +
+              '<div style="font-size:12px;color:#9ca3af">⏳ Not yet picked up</div></div>' +
+            '</div></div>';
+        }
+        const ts = p.timestamp ? new Date(p.timestamp).toLocaleString('de-DE',{day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit',second:'2-digit'}) : p.confirmedAt || '—';
+        const hasGps = p.lat && p.lng;
+        const mapsUrl = hasGps ? 'https://www.openstreetmap.org/?mlat='+p.lat+'&mlon='+p.lng+'&zoom=17' : null;
+        return '<div style="background:#fff;border:2px solid #bbf7d0;border-radius:10px;padding:14px 16px">' +
+          '<div style="display:flex;align-items:center;gap:10px;margin-bottom:10px">' +
+            '<div style="width:36px;height:36px;border-radius:50%;background:#d1fae5;color:#065f46;display:flex;align-items:center;justify-content:center;font-weight:700">'+shortName.substring(0,2).toUpperCase()+'</div>' +
+            '<div><div style="font-weight:700;font-size:14px">'+shortName+'</div>' +
+            '<div style="font-size:12px;color:#16a34a;font-weight:600">✅ Picked up</div></div>' +
+          '</div>' +
+          '<table style="width:100%;font-size:12px">' +
+            '<tr><td style="color:#6b7280;padding:2px 0;width:90px">Time</td><td style="font-weight:600;color:#111">🕐 '+ts+'</td></tr>' +
+            (p.address?'<tr><td style="color:#6b7280;padding:2px 0">Kitchen</td><td>'+p.address+'</td></tr>':'') +
+            (hasGps?'<tr><td style="color:#6b7280;padding:2px 0">GPS</td><td><code style="font-size:11px;background:#f3f4f6;padding:1px 4px;border-radius:3px">'+p.lat.toFixed(5)+', '+p.lng.toFixed(5)+'</code>'+(p.accuracy?' ±'+Math.round(p.accuracy)+'m':'')+'</td></tr>':'') +
+          '</table>' +
+          (hasGps ? '<a href="'+mapsUrl+'" target="_blank" style="display:inline-flex;align-items:center;gap:4px;margin-top:8px;font-size:11px;background:#1A73E8;color:#fff;padding:4px 10px;border-radius:6px;text-decoration:none">📍 View on Map</a>' : '') +
+        '</div>';
+      }).join('') +
+      '</div>';
+  };
+
+  // Attach real-time listeners per driver
+  drivers.forEach(driverId => {
+    const unsub = onSnapshot(fbColl(window._fbDb, 'kitchenPickups', date, driverId), (snap) => {
+      // Take the latest pickup record
+      const docs = snap.docs.map(d=>d.data()).sort((a,b)=>(b.timestamp||0)-(a.timestamp||0));
+      if(docs.length > 0) pickupsByDriver[driverId] = docs[0];
+      render();
+    });
+    // Store only the last unsub for cleanup (simple approach)
+    _kitchenPickupUnsub = unsub;
+  });
+}
+
+// ============================================================
 // ROUTE PLANS
 // ============================================================
 // Route Plans state
@@ -3275,6 +3367,11 @@ async function renderRoutePlans() {
     '<div style="background:#f0fdf4;border:1px solid #bbf7d0;border-radius:8px;padding:8px 16px;font-size:13px;font-weight:600;color:#166534">✅ Delivered: '+delivered+'</div>' +
     '<div style="background:#fef9c3;border:1px solid #fde68a;border-radius:8px;padding:8px 16px;font-size:13px;font-weight:600;color:#92400e">⏳ Pending: '+(total-delivered)+'</div>' +
     '<div style="background:#f3f4f6;border:1px solid #e5e7eb;border-radius:8px;padding:8px 16px;font-size:13px;font-weight:600;color:#374151">🚗 Couriers: '+Object.keys(byDriver).length+'</div>' +
+  '</div>' +
+  // Kitchen pickups section
+  '<div style="background:#fffbeb;border:1px solid #fde68a;border-radius:10px;padding:14px 16px;margin-bottom:18px">' +
+    '<div style="font-weight:700;font-size:14px;margin-bottom:10px">🏠 Kitchen Pickup Confirmations <span style="font-size:11px;font-weight:400;color:#92400e">· Live</span></div>' +
+    '<div id="rp-kitchen-pickups">Loading…</div>' +
   '</div>' +
   // Driver cards
   (Object.keys(byDriver).length === 0
@@ -3350,6 +3447,9 @@ async function renderRoutePlans() {
       }).join('')
   ) +
   '</div>';
+
+  // Load kitchen pickups live section after DOM renders
+  setTimeout(() => renderKitchenPickupsSection(_rpDate, 'rp-kitchen-pickups'), 50);
 }
 
 function toggleRP(idx) {

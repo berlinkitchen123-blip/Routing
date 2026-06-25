@@ -48,6 +48,7 @@ import com.example.domain.models.DeliveryTask
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.tasks.await
 
 sealed class Screen(val route: String) {
     object Login : Screen("login")
@@ -172,17 +173,39 @@ fun RoutingNavigation() {
                     if (skipSignature) {
                         coroutineScope.launch {
                             currentDelivery?.id?.let { id ->
-                                deliveryRepo.updateDeliveryStatus(id, "DELIVERED", null, currentDelivery)
-                                deliveryRepo.logDriverAction(
-                                    driverId = currentDriverId,
-                                    action = "DELIVERED",
-                                    taskId = id,
-                                    details = mapOf(
-                                        "companyName" to (currentDelivery?.companyName ?: ""),
-                                        "address" to (currentDelivery?.address ?: ""),
-                                        "proofType" to "MANUAL_CLOSE"
+                                val isKitchen = currentDelivery?.companyName?.contains("Berlin kitchen", ignoreCase = true) == true ||
+                                               currentDelivery?.address?.contains("Berlin kitchen", ignoreCase = true) == true
+                                if (isKitchen) {
+                                    // Get last known GPS from driver_locations for this driver
+                                    var lat: Double? = null; var lng: Double? = null; var accuracy: Float? = null
+                                    try {
+                                        val locSnap = com.google.firebase.firestore.FirebaseFirestore.getInstance()
+                                            .collection("driver_locations").document(currentDriverId).get().await()
+                                        lat = (locSnap.data?.get("lat") as? Number)?.toDouble()
+                                        lng = (locSnap.data?.get("lng") as? Number)?.toDouble()
+                                        accuracy = (locSnap.data?.get("accuracy") as? Number)?.toFloat()
+                                    } catch (e: Exception) { }
+                                    deliveryRepo.logKitchenPickup(
+                                        driverId = currentDriverId,
+                                        taskId = id,
+                                        lat = lat,
+                                        lng = lng,
+                                        accuracy = accuracy,
+                                        address = currentDelivery?.address ?: ""
                                     )
-                                )
+                                } else {
+                                    deliveryRepo.updateDeliveryStatus(id, "DELIVERED", null, currentDelivery)
+                                    deliveryRepo.logDriverAction(
+                                        driverId = currentDriverId,
+                                        action = "DELIVERED",
+                                        taskId = id,
+                                        details = mapOf(
+                                            "companyName" to (currentDelivery?.companyName ?: ""),
+                                            "address" to (currentDelivery?.address ?: ""),
+                                            "proofType" to "MANUAL_CLOSE"
+                                        )
+                                    )
+                                }
                             }
                             navController.popBackStack()
                         }
