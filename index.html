@@ -446,6 +446,7 @@ function route() {
   // Clean up real-time listeners from previous page to avoid stale updates
   if(window._dispatchUnsubDeliveries) { window._dispatchUnsubDeliveries(); window._dispatchUnsubDeliveries=null; }
   if(window._dispatchUnsubDriverLocs) { window._dispatchUnsubDriverLocs(); window._dispatchUnsubDriverLocs=null; }
+  if(window._dispatchAutoRefreshTimer) { clearInterval(window._dispatchAutoRefreshTimer); window._dispatchAutoRefreshTimer=null; }
   if(window._trackingUnsubscribe) { window._trackingUnsubscribe(); window._trackingUnsubscribe=null; }
   if(window._dashUnsubDeliveries) { window._dashUnsubDeliveries(); window._dashUnsubDeliveries=null; }
   if(window._kitchenPickupUnsub) { window._kitchenPickupUnsub(); window._kitchenPickupUnsub=null; }
@@ -1877,6 +1878,7 @@ async function renderDispatch(selectedDate) {
   // Stop previous listeners when switching dates
   if(_dispatchUnsubDeliveries) { _dispatchUnsubDeliveries(); _dispatchUnsubDeliveries=null; }
   if(_dispatchUnsubDriverLocs) { _dispatchUnsubDriverLocs(); _dispatchUnsubDriverLocs=null; }
+  if(window._dispatchAutoRefreshTimer) { clearInterval(window._dispatchAutoRefreshTimer); window._dispatchAutoRefreshTimer=null; }
 
   if (!selectedDate) selectedDate = document.getElementById('dispatch-date')?.value || null;
   document.getElementById('content').innerHTML = '<div class="page"><div style="padding:40px;text-align:center;color:#9ca3af">Loading dispatch…</div></div>';
@@ -2020,10 +2022,47 @@ async function renderDispatch(selectedDate) {
     const routes = [];
     routeSnap.forEach(d => { const r=d.data(); if(r.date===selected.date&&r.kitchen===selected.kitchen) routes.push({id:d.id,...r}); });
 
-    // ── Real-time listener on deliveries for selected date ──
-    // NOTE: no kitchen filter here — filter client-side so we never miss
-    // deliveries that are missing the kitchen field (e.g. Berlin Kitchen task)
+    // ── Real-time listener on BOTH deliveries AND driverRoutes ──
+    // The Android app updates deliveries; the web confirms update driverRoutes
     if(onSnapshot && fbQ && fbW) {
+
+      // Also listen to driverRoutes for this date
+      const routePrefix = selected.date + '_' + selected.kitchen + '_';
+      _dispatchUnsubDriverLocs = onSnapshot(
+        fbQ(fbColl(window._fbDb,'driverRoutes'), fbW('date','==',selected.date), fbW('kitchen','==',selected.kitchen)),
+        (routeSnapRT) => {
+          const updatedRoutes = [];
+          routeSnapRT.forEach(d => updatedRoutes.push({id:d.id,...d.data()}));
+          if(updatedRoutes.length > 0) {
+            window._dispatchRoutesCache = updatedRoutes;
+            _repaintDispatchRoutes(updatedRoutes, []);
+            const dot = document.getElementById('dispatch-live-dot');
+            const lbl = document.getElementById('dispatch-live-label');
+            if(dot) dot.style.background='#10b981';
+            if(lbl) lbl.textContent = 'Live · Updated ' + new Date().toLocaleTimeString('de-DE',{hour:'2-digit',minute:'2-digit',second:'2-digit'});
+          }
+        },
+        (err) => console.warn('[Dispatch driverRoutes listener]', err)
+      );
+
+      // Auto-refresh every 15 seconds as backup
+      if(window._dispatchAutoRefreshTimer) clearInterval(window._dispatchAutoRefreshTimer);
+      window._dispatchAutoRefreshTimer = setInterval(async () => {
+        if(!window._fbReady||!window._fbDb) return;
+        const {getDocs:gd,collection:fc,query:fq,where:fw} = window._firestoreModules||{};
+        if(!gd) return;
+        try {
+          const snap = await gd(fq(fc(window._fbDb,'driverRoutes'),fw('date','==',selected.date),fw('kitchen','==',selected.kitchen)));
+          const refreshedRoutes = [];
+          snap.forEach(d=>refreshedRoutes.push({id:d.id,...d.data()}));
+          if(refreshedRoutes.length > 0) {
+            window._dispatchRoutesCache = refreshedRoutes;
+            _repaintDispatchRoutes(refreshedRoutes, window._dispatchDeliveriesCache||[]);
+          }
+        } catch(e){}
+      }, 15000);
+
+      // Listener on deliveries
       _dispatchUnsubDeliveries = onSnapshot(
         fbQ(fbColl(window._fbDb,'deliveries'), fbW('date','==',selected.date)),
         (snap) => {
@@ -2042,6 +2081,7 @@ async function renderDispatch(selectedDate) {
             }
           });
           const deliveries = Object.values(seen);
+          window._dispatchDeliveriesCache = deliveries;
 
           // Update live dot
           const dot = document.getElementById('dispatch-live-dot');
