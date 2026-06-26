@@ -1871,6 +1871,14 @@ async function _geocodeDeliveries(dateStr, kitchen) {
 }
 
 // ── DISPATCH MONITOR — real-time via onSnapshot ───────────────
+// Helper: convert ISO date (2026-06-26) → German format (26.06.2026) for Android compat
+function _isoToGermanDate(iso) {
+  if(!iso) return iso;
+  const m = iso.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if(!m) return iso;
+  return m[3]+'.'+m[2]+'.'+m[1];
+}
+
 let _dispatchUnsubDeliveries = null;
 let _dispatchUnsubDriverLocs = null;
 
@@ -2064,7 +2072,7 @@ async function renderDispatch(selectedDate) {
 
       // Listener on deliveries
       _dispatchUnsubDeliveries = onSnapshot(
-        fbQ(fbColl(window._fbDb,'deliveries'), fbW('date','==',selected.date)),
+        fbQ(fbColl(window._fbDb,'deliveries'), fbW('date','in',[selected.date, _isoToGermanDate(selected.date)])),
         (snap) => {
           // Client-side kitchen filter: include docs with matching kitchen OR no kitchen field
           const kitchenLow = (selected.kitchen||'').toLowerCase();
